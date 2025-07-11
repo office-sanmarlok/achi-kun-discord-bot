@@ -1,31 +1,37 @@
 # Claude-Discord Bridge
 
-Claude CodeとDiscordをシームレスに連携する、複数セッション、スラッシュコマンド対応、複数枚の画像送信対応のポータブルブリッジツールです。
+A portable bridge tool that seamlessly connects Claude Code with Discord, supporting multi-session environments, slash commands, and multi-image attachments.
 
-## 主な特徴
-- **スケーラブルなマルチセッション**: Discord botを1つ作成するだけで、チャンネルを追加するたびにClaude Codeセッションが自動増設されます。
-- **画像添付サポート**: 画像分析ワークフローの完全サポート
-- **スラッシュコマンドサポート**: コマンドもDiscord経由で実行可能
-- **完全自動セットアップ**: 1コマンドでの環境検出とワンクリック導入
-- **ポータブル設計**: 絶対パスやシステム固有設定に依存しない
+**[日本語版 (Japanese) / 日本語ドキュメント](./README_ja.md)**
 
-## 操作イメージ
-1. Discord Botを作成。権限を与えてBotトークンを発行
-2. install.shを起動して、インストール開始。
-3. インストール時に、BotトークンとChannel IDを3つまで設定できます。
-   （vai add-session {channel id}であとでさらに追加可能です）
-4. Claude.mdにDiscordへの返信ルールを記載。
-5. 「vai」で起動。
-6. 「vai view」でtmuxで複数のセッションをリアルタイムに直接操作・監視
-7. Discordからチャット → Claude Codeから応答がきます。
+## Key Features
 
-## システム要件
-- macOS または Linux
-- Python 3.8以上
+- **Scalable Multi-Session**: Create one Discord bot and automatically spawn Claude Code sessions as you add channels
+- **Image Attachment Support**: Full support for image analysis workflows
+- **Slash Command Support**: Execute commands directly through Discord
+- **Zero Configuration Setup**: One-command automated environment detection and installation
+- **Portable Design**: No dependency on absolute paths or system-specific settings
+
+## How It Works
+
+1. Create a Discord Bot and obtain a bot token
+2. Run install.sh to start installation
+3. During installation, configure bot token and up to 3 channel IDs 
+   (Additional channels can be added later with `vai add-session {channel_id}`)
+4. Add Discord integration rules to your CLAUDE.md file
+5. Start with `vai`
+6. Monitor and interact with multiple sessions in real-time using `vai view`
+7. Chat from Discord → Receive responses from Claude Code
+
+## System Requirements
+
+- macOS or Linux
+- Python 3.8+
 - tmux
-- Discord Bot Token ([Discord Developer Portal](https://discord.com/developers/applications)で作成)
+- Discord Bot Token (create at [Discord Developer Portal](https://discord.com/developers/applications))
 
-## インストール / アンインストール
+## Installation / Uninstallation
+
 ```bash
 git clone https://github.com/yamkz/claude-discord-bridge.git
 cd claude-discord-bridge
@@ -37,35 +43,91 @@ cd claude-discord-bridge
 ./uninstall.sh
 ```
 
-## クイックスタート
-**1. CLAUDE.mdに追記**
-作業場所のCLAUDE.mdファイルに以下の設定を追加してください:
-[CLAUDE.md設定例](./CLAUDE.md)
+## Quick Start
 
-**1. ブリッジ開始、セッション状況の確認**
+**1. Add to CLAUDE.md**
+Add the following configuration to your workspace CLAUDE.md file:
+[CLAUDE.md Configuration Example](./CLAUDE.md)
+
+**2. Start Bridge and Check Session Status**
 ```bash
 vai
 vai view
 ```
 
-**2. Discordでテスト**
+**3. Test on Discord**
 
-**3. 停止**
+**4. Stop**
 ```bash
 vexit
 ```
 
-## コマンド一覧
-### 基本コマンド
-- `vai` - 全機能開始（Discord bot + ルーティング + Claude Codeセッション群）
-- `vai status` - 動作状態確認
-- `vai doctor` - 環境診断実行
-- `vai view` - 全セッションをリアルタイム表示
-  (現在最大6画面表示までしか実装してません)
-- `vexit` - 全機能停止
-- `vai add-session <チャンネルID>`- チャンネルID追加
-- `vai list-session`- チャンネルID一覧
-- `dp [session] "メッセージ"` - Discordにメッセージ送信
+## Command Reference
 
-## ライセンス
-MIT License - 詳細はLICENSEファイルを参照
+### Basic Commands
+- `vai` - Start all components (Discord bot + routing + Claude Code sessions)
+- `vai status` - Check operational status
+- `vai doctor` - Run environment diagnostics
+- `vai view` - Display all sessions in real-time
+  (Currently supports up to 6 session display)
+- `vexit` - Stop all components
+- `vai add-session <channel_id>` - Add new channel ID
+- `vai list-session` - List all channel IDs
+- `dp [session] "message"` - Send message to Discord
+
+## Why Use Claude-Discord Bridge?
+
+**One Discord Bot, Infinite Scaling**
+- Create bot once in Discord Developer Portal
+- Each new Discord channel automatically spawns a corresponding Claude Code session
+- Separate channels for different use cases: teams, projects, personal workflows
+
+**Example Use Cases**:
+- #development-help → Claude Code Session 1 (development environment)
+- #data-analysis → Claude Code Session 2 (analysis environment)  
+- #design-review → Claude Code Session 3 (UI/UX workspace)
+- Each session runs completely independently with different projects and workflows
+
+## Architecture
+
+```
+Discord Channel ↔ Discord Bot ↔ Flask App ↔ Claude Code Session
+     (1:1)           (API)        (Bridge)      (Independent)
+```
+
+## Configuration
+
+Settings are stored in `~/.claude-discord-bridge/`:
+- `.env` - Discord bot token and system settings
+- `sessions.json` - Channel to session mappings
+
+Add new sessions:
+```bash
+vai add-session <channel-id>
+```
+
+## Troubleshooting
+
+**Port conflicts**: Run `vai doctor` to check and resolve port issues
+
+**Bot not responding**: Verify bot token and permissions in Discord server
+
+**Bridge won't start**: Run `vai doctor` for complete diagnostics
+
+## Development
+
+1. Fork the repository
+2. Create a feature branch
+3. Implement changes
+4. Test with `vai doctor`
+5. Submit a Pull Request
+
+## License
+
+MIT License - see LICENSE file for details
+
+## Core Technologies
+
+- Discord.py (bot framework)
+- Flask (HTTP bridge)
+- tmux (session management)
