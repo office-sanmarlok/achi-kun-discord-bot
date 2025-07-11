@@ -1,0 +1,435 @@
+#!/usr/bin/env python3
+"""
+vai - Claude-Discord Bridge起動・管理コマンド
+"""
+
+import os
+import sys
+import subprocess
+import time
+from pathlib import Path
+
+# Add parent directory to path for imports
+toolkit_root = Path(__file__).parent.parent
+sys.path.insert(0, str(toolkit_root))
+
+from src.environment import EnvironmentDetector
+from src.tmux_manager import TmuxManager
+from src.attachment_manager import AttachmentManager
+from config.settings import SettingsManager
+from lib.utils import (
+    is_service_running, create_pid_file, stop_service,
+    find_available_port, is_port_in_use
+)
+
+def cmd_start():
+    """サービスを起動"""
+    settings = SettingsManager()
+    
+    # Check if configured
+    if not settings.is_configured():
+        print("❌ Claude-Discord Bridge is not configured.")
+        print("Please run './install.sh' first.")
+        sys.exit(1)
+    
+    # Check if already running
+    if is_service_running('discord_bot') or is_service_running('flask_app'):
+        print("⚠️  Services are already running.")
+        print("Use 'vai status' to check status or 'vexit' to stop.")
+        return
+    
+    print("🚀 Starting Claude-Discord Bridge...")
+    
+    # Start tmux session for monitoring
+    tmux = TmuxManager()
+    if not tmux.create_session():
+        print("❌ Failed to create tmux session")
+        sys.exit(1)
+    
+    tmux.create_panes()
+    
+    # Start Claude Code sessions
+    work_dir = settings.get_claude_work_dir()
+    claude_options = settings.get_claude_options()
+    sessions = settings.list_sessions()
+    
+    print("  Starting Claude Code sessions...")
+    for session_num, channel_id in sessions:
+        if tmux.create_claude_session(session_num, work_dir, claude_options):
+            time.sleep(1)  # Give each session time to start
+        else:
+            print(f"  ⚠️  Failed to start Claude session {session_num}")
+    
+    print(f"  Started {len(sessions)} Claude Code sessions")
+    
+    # Get paths
+    src_dir = toolkit_root / 'src'
+    
+    # Start Discord bot in pane 0
+    print("  Starting Discord bot...")
+    tmux.send_command("0.0", f"cd {src_dir} && python3 discord_bot.py")
+    time.sleep(2)  # Give bot time to start
+    
+    # Start Flask app in pane 1
+    flask_port = settings.get_port('flask')
+    if is_port_in_use(flask_port):
+        print(f"  ⚠️  Port {flask_port} is in use, finding alternative...")
+        flask_port = find_available_port(flask_port + 1)
+        if flask_port is None:
+            print("  ❌ No available ports found")
+            sys.exit(1)
+        print(f"  Using port {flask_port}")
+    
+    print("  Starting Flask app...")
+    tmux.send_command("0.1", f"cd {src_dir} && python3 flask_app.py")
+    
+    # Third pane for monitoring
+    tmux.send_command("0.2", "echo 'Claude-Discord Bridge - Monitoring'")
+    
+    print("\n✅ All services started successfully!")
+    
+    # Show Claude sessions
+    claude_sessions = tmux.list_claude_sessions()
+    if claude_sessions:
+        print(f"\n🤖 Claude Code Sessions:")
+        for num, session_name in claude_sessions:
+            default = " ⭐ (default)" if num == settings.get_default_session() else ""
+            print(f"  Session {num}: {session_name}{default}")
+    
+    print("\nUsage:")
+    print("  vai status    - Check service status")
+    print("  vai doctor    - Run environment diagnosis")
+    print("  vai view      - View all sessions in one screen")
+    print("  vexit         - Stop all services")
+    print("  dp 'message'  - Send message to Discord")
+    
+    # Offer to attach to tmux
+    print(f"\nTo view services: tmux attach -t {tmux.session_name}")
+    if claude_sessions:
+        print("To view Claude sessions:")
+        for num, session_name in claude_sessions[:3]:  # Show first 3
+            print(f"  tmux attach -t {session_name}")
+        if len(claude_sessions) > 3:
+            print(f"  ... and {len(claude_sessions) - 3} more")
+
+def cmd_status():
+    """サービスの状態を確認"""
+    settings = SettingsManager()
+    tmux = TmuxManager()
+    attachment_manager = AttachmentManager()
+    
+    print("📊 Claude-Discord Bridge Status")
+    print("=" * 40)
+    
+    # Configuration
+    print("\n⚙️  Configuration:")
+    print(f"  Configured: {'✅ Yes' if settings.is_configured() else '❌ No'}")
+    
+    # Services
+    print("\n🔧 Services:")
+    print(f"  Discord Bot: {'✅ Running' if is_service_running('discord_bot') else '❌ Stopped'}")
+    print(f"  Flask App: {'✅ Running' if is_service_running('flask_app') else '❌ Stopped'}")
+    print(f"  tmux Session: {'✅ Active' if tmux.is_session_exists() else '❌ Inactive'}")
+    
+    # Discord Sessions
+    print("\n💬 Discord Sessions:")
+    sessions = settings.list_sessions()
+    if sessions:
+        for num, channel_id in sessions:
+            default = " (default)" if num == settings.get_default_session() else ""
+            print(f"  Session {num}: {channel_id}{default}")
+    else:
+        print("  No sessions configured")
+    
+    # Claude Sessions
+    print("\n🤖 Claude Code Sessions:")
+    claude_sessions = tmux.list_claude_sessions()
+    if claude_sessions:
+        for num, session_name in claude_sessions:
+            running = "✅ Running" if tmux.is_claude_session_exists(num) else "❌ Stopped"
+            print(f"  Session {num}: {running}")
+    else:
+        print("  No Claude sessions found")
+    
+    # Attachment Storage
+    print("\n📎 Attachment Storage:")
+    storage_info = attachment_manager.get_storage_info()
+    if 'error' in storage_info:
+        print(f"  ❌ Error: {storage_info['error']}")
+    else:
+        print(f"  Files: {storage_info['total_files']}")
+        print(f"  Size: {storage_info['total_size_mb']} MB")
+        print(f"  Directory: {storage_info['directory']}")
+    
+    # Ports
+    flask_port = settings.get_port('flask')
+    print(f"\n🔌 Ports:")
+    print(f"  Flask: {flask_port} {'✅ Available' if not is_port_in_use(flask_port) else '❌ In use'}")
+
+def cmd_doctor():
+    """環境診断を実行"""
+    detector = EnvironmentDetector()
+    is_healthy = detector.print_diagnosis()
+    sys.exit(0 if is_healthy else 1)
+
+def cmd_list_sessions():
+    """セッション一覧を表示"""
+    settings = SettingsManager()
+    sessions = settings.list_sessions()
+    
+    if not sessions:
+        print("No sessions configured.")
+        return
+    
+    print("📋 Configured Sessions:")
+    print("=" * 40)
+    default_session = settings.get_default_session()
+    
+    for num, channel_id in sessions:
+        default = " ⭐ (default)" if num == default_session else ""
+        print(f"Session {num}: {channel_id}{default}")
+
+def cmd_add_session(channel_id: str):
+    """新しいセッションを追加"""
+    settings = SettingsManager()
+    
+    # Validate channel ID
+    if not channel_id.isdigit() or len(channel_id) < 15:
+        print("❌ Invalid channel ID format")
+        print("Channel IDs should be 15-20 digit numbers")
+        return
+    
+    # Check if already exists
+    existing_session = settings.channel_to_session(channel_id)
+    if existing_session:
+        print(f"⚠️  Channel {channel_id} is already configured as session {existing_session}")
+        return
+    
+    # Add session
+    session_num = settings.add_session(channel_id)
+    print(f"✅ Added channel {channel_id} as session {session_num}")
+    
+    # Update sessions list in memory if bot is running
+    if is_service_running('discord_bot'):
+        print("ℹ️  Restart the bot to use the new session")
+
+def cmd_view():
+    """全セッションを1画面でリアルタイム表示"""
+    settings = SettingsManager()
+    tmux = TmuxManager()
+    
+    # Check if sessions exist
+    claude_sessions = tmux.list_claude_sessions()
+    if not claude_sessions:
+        print("❌ No Claude Code sessions are running")
+        print("Run 'vai' to start sessions first")
+        return
+    
+    print("🖥️  Setting up interactive multi-session view...")
+    
+    view_session = "claude-view"
+    
+    try:
+        # Kill existing view session if it exists
+        if subprocess.run(["tmux", "has-session", "-t", view_session], capture_output=True).returncode == 0:
+            subprocess.run(["tmux", "kill-session", "-t", view_session], check=True)
+        
+        # Create new view session
+        subprocess.run(["tmux", "new-session", "-d", "-s", view_session], check=True)
+        
+        # Setup custom key bindings for enhanced navigation
+        _setup_view_keybindings(view_session)
+        
+        # Setup layout based on number of sessions
+        num_sessions = len(claude_sessions)
+        
+        if num_sessions == 1:
+            # Single session - link and display
+            session_name = f"claude-session-{claude_sessions[0][0]}"
+            _create_linked_view(view_session, "0", session_name, claude_sessions[0][0])
+        
+        elif num_sessions == 2:
+            # Split vertically for 2 sessions
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0"], check=True)
+            
+            # Link both sessions
+            for i, (session_num, _) in enumerate(claude_sessions[:2]):
+                session_name = f"claude-session-{session_num}"
+                _create_linked_view(view_session, f"0.{i}", session_name, session_num)
+        
+        elif num_sessions == 3:
+            # 3 sessions: one large top, two bottom
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0"], check=True)
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0.1"], check=True)
+            
+            # Link all sessions with improved layout
+            for i, (session_num, _) in enumerate(claude_sessions[:3]):
+                session_name = f"claude-session-{session_num}"
+                _create_linked_view(view_session, f"0.{i}", session_name, session_num)
+        
+        elif num_sessions == 4:
+            # 4 sessions: 2x2 grid layout
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0"], check=True)
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0.0"], check=True)
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0.2"], check=True)
+            
+            # Link all 4 sessions
+            for i, (session_num, _) in enumerate(claude_sessions[:4]):
+                session_name = f"claude-session-{session_num}"
+                _create_linked_view(view_session, f"0.{i}", session_name, session_num)
+        
+        elif num_sessions == 5 or num_sessions == 6:
+            # 5-6 sessions: 3x2 grid layout
+            # Create top row (3 panes)
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0"], check=True)
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0.1"], check=True)
+            
+            # Create bottom row (2-3 panes)
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0.0"], check=True)
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0.1"], check=True)
+            
+            if num_sessions == 6:
+                subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0.2"], check=True)
+            
+            # Link all sessions
+            pane_mapping = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5"]
+            for i, (session_num, _) in enumerate(claude_sessions[:num_sessions]):
+                session_name = f"claude-session-{session_num}"
+                _create_linked_view(view_session, pane_mapping[i], session_name, session_num)
+        
+        elif num_sessions >= 7:
+            # 7+ sessions: fallback to 6 sessions display
+            print(f"⚠️  Displaying first 6 sessions out of {num_sessions}")
+            
+            # Same as 6 sessions layout
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0"], check=True)
+            subprocess.run(["tmux", "split-window", "-h", "-t", f"{view_session}:0.1"], check=True)
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0.0"], check=True)
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0.1"], check=True)
+            subprocess.run(["tmux", "split-window", "-v", "-t", f"{view_session}:0.2"], check=True)
+            
+            # Link first 6 sessions
+            pane_mapping = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5"]
+            for i, (session_num, _) in enumerate(claude_sessions[:6]):
+                session_name = f"claude-session-{session_num}"
+                _create_linked_view(view_session, pane_mapping[i], session_name, session_num)
+        
+        # Set pane titles
+        subprocess.run(["tmux", "set-option", "-t", view_session, "pane-border-status", "top"])
+        
+        # Enable mouse support for better interaction
+        subprocess.run(["tmux", "set-option", "-t", view_session, "mouse", "on"])
+        
+        print(f"✅ Interactive multi-session view created!")
+        print(f"📺 Displaying {min(num_sessions, 6)} sessions in real-time")
+        print(f"🎮 Features:")
+        print(f"   • Real-time Claude Code session monitoring")
+        print(f"   • Mouse support enabled")
+        print(f"   • Ctrl+B + Arrow keys: Navigate between panes")
+        print(f"   • Ctrl+B + S: Toggle synchronize-panes")
+        print(f"   • Ctrl+B + R: Refresh all panes")
+        print(f"   • Ctrl+B + F: Toggle full-screen pane")
+        print(f"   • Ctrl+B + D: Detach from view")
+        
+        # Offer to attach immediately
+        try:
+            import sys
+            if sys.stdin.isatty():
+                response = input(f"\n🚀 Attach to interactive view now? (Y/n): ")
+                if response.lower() != 'n':
+                    subprocess.run(["tmux", "attach", "-t", view_session])
+        except KeyboardInterrupt:
+            print(f"\n📱 View session created: tmux attach -t {view_session}")
+            
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to create view session: {e}")
+        print("Make sure tmux is available and sessions are running")
+
+def _setup_view_keybindings(view_session):
+    """Setup enhanced key bindings for view session"""
+    # Refresh all panes
+    subprocess.run([
+        "tmux", "bind-key", "-T", "prefix", "r", 
+        f"run-shell 'tmux list-panes -t {view_session} -F \"#{{pane_index}}\" | xargs -I {{}} tmux send-keys -t {view_session}:0.{{}} C-l'"
+    ])
+    
+    # Toggle synchronize panes
+    subprocess.run([
+        "tmux", "bind-key", "-T", "prefix", "s",
+        f"setw synchronize-panes"
+    ])
+    
+    # Toggle full screen pane
+    subprocess.run([
+        "tmux", "bind-key", "-T", "prefix", "f",
+        "resize-pane -Z"
+    ])
+
+def _create_linked_view(view_session, pane_target, claude_session, session_num):
+    """Create a real-time view pane for a Claude Code session"""
+    # Use direct attach for reliable real-time display
+    subprocess.run([
+        "tmux", "send-keys", "-t", f"{view_session}:{pane_target}",
+        f"unset TMUX && tmux attach -t {claude_session}", "Enter"
+    ])
+    
+    # Brief pause to ensure attachment
+    time.sleep(0.3)
+    
+    # Set pane title for identification
+    subprocess.run([
+        "tmux", "select-pane", "-t", f"{view_session}:{pane_target}",
+        "-T", f"Claude Session {session_num}"
+    ])
+
+def print_usage():
+    """使用方法を表示"""
+    print("vai - Claude-Discord Bridge Manager")
+    print("\nUsage:")
+    print("  vai                    Start all services")
+    print("  vai status             Check service status")
+    print("  vai doctor             Run environment diagnosis")
+    print("  vai view               View all sessions in one screen")
+    print("  vai list-sessions      List configured sessions")
+    print("  vai add-session <id>   Add new Discord channel session")
+    print("\nOther commands:")
+    print("  vexit                  Stop all services")
+    print("  dp [session] 'msg'     Send message to Discord")
+
+def main():
+    """メイン関数"""
+    if len(sys.argv) == 1:
+        # No arguments - start services
+        cmd_start()
+    elif len(sys.argv) == 2:
+        command = sys.argv[1]
+        if command == 'status':
+            cmd_status()
+        elif command == 'doctor':
+            cmd_doctor()
+        elif command == 'view':
+            cmd_view()
+        elif command == 'list-sessions':
+            cmd_list_sessions()
+        elif command in ['help', '--help', '-h']:
+            print_usage()
+        else:
+            print(f"Unknown command: {command}")
+            print_usage()
+            sys.exit(1)
+    elif len(sys.argv) == 3:
+        command = sys.argv[1]
+        arg = sys.argv[2]
+        if command == 'add-session':
+            cmd_add_session(arg)
+        else:
+            print(f"Unknown command: {command}")
+            print_usage()
+            sys.exit(1)
+    else:
+        print("Invalid usage")
+        print_usage()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

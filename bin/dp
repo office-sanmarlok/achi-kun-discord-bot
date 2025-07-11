@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# dp - Discord Postコマンド
+# 使い方:
+#   dp "message"                    # デフォルトセッション
+#   dp 2 "message"                  # セッション2
+#   dp 1234567890123456 "message"   # チャンネルID直接指定
+#
+
+# Get toolkit root directory
+TOOLKIT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Check arguments
+if [ $# -eq 0 ]; then
+    echo "Usage: dp [session_number or channel_id] \"message\""
+    exit 1
+fi
+
+# Parse arguments
+if [ $# -eq 1 ]; then
+    # Only message provided, use default session
+    MESSAGE="$1"
+    echo -e "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py"
+elif [ $# -eq 2 ]; then
+    # Session/channel and message provided
+    CHANNEL="$1"
+    MESSAGE="$2"
+    echo -e "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py" "$CHANNEL"
+else
+    echo "Error: Too many arguments"
+    echo "Usage: dp [session_number or channel_id] \"message\""
+    exit 1
+fi
