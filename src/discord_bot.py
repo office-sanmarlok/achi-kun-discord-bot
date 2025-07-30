@@ -146,13 +146,6 @@ class ClaudeCLIBot(commands.Bot):
         logger.info(f'{self.user} has connected to Discord!')
         print(f'✅ Discord bot is ready as {self.user}')
         
-        # ギルドイベントの受信確認
-        if self.intents.guilds:
-            logger.info('Guild intents enabled - thread events will be received')
-            print('✅ Guild intents enabled - ready to receive thread events')
-        else:
-            logger.warning('Guild intents not enabled - thread events will NOT be received')
-            print('⚠️  Guild intents not enabled - thread events will NOT be received')
         
         # 初回システムクリーンアップ
         await self._perform_initial_cleanup()
@@ -412,65 +405,6 @@ class ClaudeCLIBot(commands.Bot):
         # それ以外のメッセージは転送する
         return True
     
-    async def on_thread_create(self, thread):
-        """
-        新規スレッド作成時の処理
-        
-        処理フロー：
-        1. 親チャンネルの確認
-        2. 登録済みチャンネルかチェック
-        3. 既存セッションの確認（!ccコマンドによる作成との重複防止）
-        4. スレッドに自動参加
-        5. セッション作成
-        6. 親メッセージ取得と初期コンテクスト設定
-        
-        注意：!ccコマンドで作成されたスレッドの場合、
-        既にセッションが作成されているため、ここでは処理をスキップする
-        """
-        # 親チャンネルの確認
-        parent_channel_id = str(thread.parent_id)
-        if not self.settings.is_channel_registered(parent_channel_id):
-            logger.info(f"Ignored thread in unregistered channel: {parent_channel_id}")
-            return
-        
-        logger.info(f"New thread detected: {thread.name} (ID: {thread.id}) in registered channel")
-        
-        # 既にセッションが存在するかチェック（!ccコマンド経由の場合）
-        thread_id = str(thread.id)
-        existing_session = self.settings.thread_to_session(thread_id)
-        if existing_session is not None:
-            logger.info(f"Thread {thread_id} already has session {existing_session}, skipping creation")
-            return
-        
-        # スレッドに参加
-        try:
-            await thread.join()
-            logger.info(f"Joined thread: {thread.name} (ID: {thread.id})")
-            print(f"🧵 Joined new thread: {thread.name}")
-        except Exception as e:
-            logger.error(f"Failed to join thread {thread.id}: {e}")
-            # 参加失敗してもセッション作成は試行する
-        
-        # セッション作成
-        session_num = self.settings.add_thread_session(thread_id)
-        logger.info(f"Assigned session {session_num} to thread {thread_id}")
-        
-        # 親メッセージ取得と初期コンテクスト設定
-        try:
-            parent_message = await thread.parent.fetch_message(thread.id)
-            logger.info(f"Fetched parent message for thread {thread_id}")
-            await self._start_claude_session_with_context(
-                session_num,
-                thread.name,
-                parent_message
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch parent message for thread {thread_id}: {e}")
-            # 親メッセージなしでもセッションは起動
-            await self._start_claude_session(session_num, thread.name)
-        
-        print(f"✅ New thread '{thread.name}' assigned to session {session_num}")
-    
     async def _start_claude_session(self, session_num: int, thread_name: str):
         """Claude Codeセッションを起動"""
         session_name = f"claude-session-{session_num}"
@@ -648,11 +582,6 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         使用方法: !cc <thread-name>
         thread-name: 小文字アルファベットとハイフンのみ使用可能
         """
-        # チャンネルが登録済みか確認
-        channel_id = str(ctx.channel.id)
-        if not settings.is_channel_registered(channel_id):
-            await ctx.send("❌ このチャンネルは登録されていません。")
-            return
         
         # スレッド名の必須チェック
         if not thread_name:
@@ -687,8 +616,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             
             # スレッドを作成
             thread = await parent_message.create_thread(
-                name=thread_name,
-                auto_archive_duration=1440  # 24時間後に自動アーカイブ
+                name=thread_name
             )
             
             # Botがスレッドに参加

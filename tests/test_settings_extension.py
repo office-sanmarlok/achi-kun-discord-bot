@@ -65,7 +65,6 @@ class TestSettingsExtension(unittest.TestCase):
         # 既存の設定ファイルを作成
         existing_settings = {
             'thread_sessions': {'111': 1, '222': 2},
-            'registered_channels': ['333', '444'],
             'ports': {'flask': 5001}
         }
         
@@ -81,7 +80,6 @@ class TestSettingsExtension(unittest.TestCase):
         with open(self.settings.settings_file, 'r') as f:
             saved_settings = json.load(f)
             self.assertEqual(saved_settings['thread_sessions'], existing_settings['thread_sessions'])
-            self.assertEqual(saved_settings['registered_channels'], existing_settings['registered_channels'])
             self.assertEqual(saved_settings['ports'], existing_settings['ports'])
             self.assertEqual(saved_settings['post_target_channel'], test_channel_id)
     
@@ -90,7 +88,6 @@ class TestSettingsExtension(unittest.TestCase):
         # post_target_channelを含まない既存の設定ファイル
         old_settings = {
             'thread_sessions': {'111': 1},
-            'registered_channels': ['333'],
             'ports': {'flask': 5001}
         }
         
@@ -107,7 +104,6 @@ class TestSettingsExtension(unittest.TestCase):
         
         # 既存の設定が保持されているか確認
         self.assertEqual(loaded_settings['thread_sessions'], old_settings['thread_sessions'])
-        self.assertEqual(loaded_settings['registered_channels'], old_settings['registered_channels'])
         self.assertEqual(loaded_settings['ports'], old_settings['ports'])
     
     def test_default_settings_include_post_target_channel(self):
@@ -119,7 +115,6 @@ class TestSettingsExtension(unittest.TestCase):
         self.assertIn('post_target_channel', loaded_settings)
         self.assertIsNone(loaded_settings['post_target_channel'])
         self.assertEqual(loaded_settings['thread_sessions'], {})
-        self.assertEqual(loaded_settings['registered_channels'], [])
         self.assertEqual(loaded_settings['ports'], {'flask': 5001})
     
     def test_ensure_config_dir_called(self):

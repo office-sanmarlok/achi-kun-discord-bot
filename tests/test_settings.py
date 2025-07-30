@@ -43,29 +43,9 @@ class TestSettingsManager(unittest.TestCase):
         settings = self.settings._load_settings()
         
         self.assertIn('thread_sessions', settings)
-        self.assertIn('registered_channels', settings)
         self.assertIn('ports', settings)
         self.assertEqual(settings['thread_sessions'], {})
-        self.assertEqual(settings['registered_channels'], [])
         self.assertEqual(settings['ports']['flask'], 5001)
-    
-    def test_channel_registration(self):
-        """チャンネル登録機能のテスト"""
-        channel_id = "123456789"
-        
-        # 初期状態では未登録
-        self.assertFalse(self.settings.is_channel_registered(channel_id))
-        
-        # チャンネルを登録
-        self.settings.register_channel(channel_id)
-        
-        # 登録後は登録済み
-        self.assertTrue(self.settings.is_channel_registered(channel_id))
-        
-        # 重複登録のテスト
-        self.settings.register_channel(channel_id)
-        settings = self.settings._load_settings()
-        self.assertEqual(settings['registered_channels'].count(channel_id), 1)
     
     def test_thread_session_management(self):
         """スレッドセッション管理のテスト"""
@@ -116,14 +96,12 @@ class TestSettingsManager(unittest.TestCase):
     def test_settings_persistence(self):
         """設定の永続化テスト"""
         # 設定を追加
-        self.settings.register_channel("channel_123")
         self.settings.add_thread_session("thread_abc")
         
         # 新しいインスタンスで読み込み
         new_settings = SettingsManager()
         
         # 設定が保持されていることを確認
-        self.assertTrue(new_settings.is_channel_registered("channel_123"))
         self.assertEqual(new_settings.thread_to_session("thread_abc"), 1)
     
     def test_port_configuration(self):
@@ -150,13 +128,7 @@ class TestSettingsManager(unittest.TestCase):
         # トークンを設定
         self.settings.set_token("test_token_123")
         
-        # まだチャンネルが登録されていないので未設定
-        self.assertFalse(self.settings.is_configured())
-        
-        # チャンネルを登録
-        self.settings.register_channel("channel_123")
-        
-        # これで設定完了
+        # トークンが設定されていれば設定完了
         self.assertTrue(self.settings.is_configured())
 
 

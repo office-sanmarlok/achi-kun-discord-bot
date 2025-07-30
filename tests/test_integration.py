@@ -78,13 +78,11 @@ class TestIntegration(unittest.TestCase):
                 self.assertEqual(settings.get_post_target_channel(), test_channel_id)
                 
                 # Test with existing settings
-                settings.register_channel("123456789012345678")
                 settings.add_thread_session("111222333444555666")
                 
                 # Verify all settings are preserved
                 loaded_settings = settings._load_settings()
                 self.assertEqual(loaded_settings['post_target_channel'], test_channel_id)
-                self.assertIn("123456789012345678", loaded_settings['registered_channels'])
                 self.assertIn("111222333444555666", loaded_settings['thread_sessions'])
                 
         finally:

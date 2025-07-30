@@ -154,31 +154,6 @@ setup_config() {
         exit 1
     fi
     
-    # Get Discord channel IDs for sessions
-    echo ""
-    echo "Now let's set up your Discord sessions."
-    echo "You can add up to 3 sessions (channels) initially."
-    echo ""
-    
-    SESSIONS=()
-    for i in 1 2 3; do
-        echo "Session $i - Enter channel ID (or press Enter to skip):"
-        read CHANNEL_ID
-        
-        if [[ -n "$CHANNEL_ID" ]]; then
-            if [[ ! "$CHANNEL_ID" =~ ^[0-9]{15,20}$ ]]; then
-                print_warning "Invalid channel ID format, skipping"
-            else
-                SESSIONS+=("$i:$CHANNEL_ID")
-            fi
-        fi
-    done
-    
-    if [[ ${#SESSIONS[@]} -eq 0 ]]; then
-        print_error "At least one session must be configured"
-        exit 1
-    fi
-    
     # Get Claude Code configuration
     echo ""
     echo "Claude Code Configuration:"
@@ -210,42 +185,16 @@ EOF
     
     chmod 600 "$CONFIG_DIR/.env"
     
-    # Create sessions.json for backward compatibility
-    echo "{" > "$CONFIG_DIR/sessions.json"
-    for i in "${!SESSIONS[@]}"; do
-        IFS=':' read -r num channel <<< "${SESSIONS[$i]}"
-        echo "  \"$num\": \"$channel\"" >> "$CONFIG_DIR/sessions.json"
-        if [[ $i -lt $((${#SESSIONS[@]} - 1)) ]]; then
-            echo "," >> "$CONFIG_DIR/sessions.json"
-        fi
-    done
-    echo "}" >> "$CONFIG_DIR/sessions.json"
-    
     # Create settings.json for new thread-based system
     cat > "$CONFIG_DIR/settings.json" << EOF
 {
   "thread_sessions": {},
-  "registered_channels": [],
   "ports": {
     "flask": 5001
   }
 }
 EOF
     
-    # Add configured channels to registered_channels
-    for i in "${!SESSIONS[@]}"; do
-        IFS=':' read -r num channel <<< "${SESSIONS[$i]}"
-        # Update settings.json to add channel to registered_channels
-        python3 -c "
-import json
-with open('$CONFIG_DIR/settings.json', 'r') as f:
-    settings = json.load(f)
-if '$channel' not in settings['registered_channels']:
-    settings['registered_channels'].append('$channel')
-with open('$CONFIG_DIR/settings.json', 'w') as f:
-    json.dump(settings, f, indent=2)
-"
-    done
     
     print_success "Configuration saved"
 }

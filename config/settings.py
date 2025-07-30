@@ -179,7 +179,6 @@ class SettingsManager:
                 return settings
         return {
             'thread_sessions': {},
-            'registered_channels': [],
             'ports': {'flask': 5001},
             'post_target_channel': None
         }
@@ -189,20 +188,6 @@ class SettingsManager:
         self.ensure_config_dir()
         with open(self.settings_file, 'w') as f:
             json.dump(settings, f, indent=2)
-    
-    def is_channel_registered(self, channel_id: str) -> bool:
-        """チャンネルが登録済みか確認"""
-        settings = self._load_settings()
-        return channel_id in settings.get('registered_channels', [])
-    
-    def register_channel(self, channel_id: str):
-        """チャンネルを登録"""
-        settings = self._load_settings()
-        if 'registered_channels' not in settings:
-            settings['registered_channels'] = []
-        if channel_id not in settings['registered_channels']:
-            settings['registered_channels'].append(channel_id)
-            self._save_settings(settings)
     
     def thread_to_session(self, thread_id: str) -> Optional[int]:
         """スレッドIDからセッション番号を取得"""

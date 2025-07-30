@@ -82,12 +82,6 @@ def cmd_start():
     
     print("\n✅ All services started successfully!")
     
-    # Show registered channels
-    settings_data = settings._load_settings()
-    registered = settings_data.get('registered_channels', [])
-    if registered:
-        print(f"\n📋 Monitoring {len(registered)} channel(s) for thread creation")
-    
     print("\nUsage:")
     print("  vai status    - Check service status")
     print("  vai doctor    - Run environment diagnosis")
@@ -125,16 +119,6 @@ def cmd_status():
             print(f"  Session {num}: Thread {thread_id}")
     else:
         print("  No thread sessions configured")
-    
-    # Registered Channels
-    print("\n📋 Registered Channels:")
-    settings_data = settings._load_settings()
-    registered = settings_data.get('registered_channels', [])
-    if registered:
-        for channel_id in registered:
-            print(f"  Channel: {channel_id}")
-    else:
-        print("  No channels registered")
     
     # Claude Sessions
     print("\n🤖 Claude Code Sessions:")
@@ -180,40 +164,7 @@ def cmd_list_sessions():
     else:
         print("No thread sessions configured.")
     
-    # Also show registered channels
-    print("\n📋 Registered Channels:")
-    print("=" * 40)
-    settings_data = settings._load_settings()
-    registered = settings_data.get('registered_channels', [])
-    if registered:
-        for channel_id in registered:
-            print(f"Channel: {channel_id}")
-    else:
-        print("No channels registered.")
 
-def cmd_add_session(channel_id: str):
-    """チャンネルを登録（スレッド作成を監視対象に）"""
-    settings = SettingsManager()
-    
-    # Validate channel ID
-    if not channel_id.isdigit() or len(channel_id) < 15:
-        print("❌ Invalid channel ID format")
-        print("Channel IDs should be 15-20 digit numbers")
-        return
-    
-    # Check if already registered
-    if settings.is_channel_registered(channel_id):
-        print(f"⚠️  Channel {channel_id} is already registered")
-        return
-    
-    # Register channel
-    settings.register_channel(channel_id)
-    print(f"✅ Registered channel {channel_id}")
-    print(f"ℹ️  Threads created in this channel will now be monitored")
-    
-    # Update sessions list in memory if bot is running
-    if is_service_running('discord_bot'):
-        print("ℹ️  Restart the bot to apply changes")
 
 def cmd_view():
     """全セッションを1画面でリアルタイム表示"""
@@ -392,8 +343,7 @@ def print_usage():
     print("  vai status             Check service status")
     print("  vai doctor             Run environment diagnosis")
     print("  vai view               View all sessions in one screen")
-    print("  vai list-sessions      List thread sessions and registered channels")
-    print("  vai add-session <id>   Register a Discord channel for thread monitoring")
+    print("  vai list-sessions      List thread sessions")
     print("\nOther commands:")
     print("  vexit                  Stop all services")
     print("  dp <session> 'msg'     Send message to Discord thread (session number required)")
@@ -415,15 +365,6 @@ def main():
             cmd_list_sessions()
         elif command in ['help', '--help', '-h']:
             print_usage()
-        else:
-            print(f"Unknown command: {command}")
-            print_usage()
-            sys.exit(1)
-    elif len(sys.argv) == 3:
-        command = sys.argv[1]
-        arg = sys.argv[2]
-        if command == 'add-session':
-            cmd_add_session(arg)
         else:
             print(f"Unknown command: {command}")
             print_usage()
