@@ -24,6 +24,8 @@ import asyncio
 import subprocess
 import logging
 import requests
+import re
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -391,9 +393,13 @@ class ClaudeCLIBot(commands.Bot):
         処理フロー：
         1. 親チャンネルの確認
         2. 登録済みチャンネルかチェック
-        3. スレッドに自動参加
-        4. セッション作成
-        5. 親メッセージ取得と初期コンテクスト設定
+        3. 既存セッションの確認（!ccコマンドによる作成との重複防止）
+        4. スレッドに自動参加
+        5. セッション作成
+        6. 親メッセージ取得と初期コンテクスト設定
+        
+        注意：!ccコマンドで作成されたスレッドの場合、
+        既にセッションが作成されているため、ここでは処理をスキップする
         """
         # 親チャンネルの確認
         parent_channel_id = str(thread.parent_id)
@@ -402,6 +408,13 @@ class ClaudeCLIBot(commands.Bot):
             return
         
         logger.info(f"New thread detected: {thread.name} (ID: {thread.id}) in registered channel")
+        
+        # 既にセッションが存在するかチェック（!ccコマンド経由の場合）
+        thread_id = str(thread.id)
+        existing_session = self.settings.thread_to_session(thread_id)
+        if existing_session is not None:
+            logger.info(f"Thread {thread_id} already has session {existing_session}, skipping creation")
+            return
         
         # スレッドに参加
         try:
@@ -413,7 +426,6 @@ class ClaudeCLIBot(commands.Bot):
             # 参加失敗してもセッション作成は試行する
         
         # セッション作成
-        thread_id = str(thread.id)
         session_num = self.settings.add_thread_session(thread_id)
         logger.info(f"Assigned session {session_num} to thread {thread_id}")
         
@@ -565,6 +577,94 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             lines.append(f"Session {num}: <#{channel_id}>")
         
         await ctx.send("\n".join(lines))
+    
+    @bot.command(name='cc')
+    async def cc_command(ctx, thread_name: str = None):
+        """メッセージをスレッド化してClaude Codeセッションを開始
+        
+        使用方法: !cc <thread-name>
+        thread-name: 小文字アルファベットとハイフンのみ使用可能
+        """
+        # チャンネルが登録済みか確認
+        channel_id = str(ctx.channel.id)
+        if not settings.is_channel_registered(channel_id):
+            await ctx.send("❌ このチャンネルは登録されていません。")
+            return
+        
+        # スレッド名の必須チェック
+        if not thread_name:
+            await ctx.send("❌ スレッド名を指定してください。使用方法: `!cc <thread-name>`")
+            return
+        
+        # スレッド名のバリデーション（小文字アルファベットとハイフンのみ）
+        if not re.match(r'^[a-z]+(-[a-z]+)*$', thread_name):
+            await ctx.send("❌ スレッド名は小文字アルファベットとハイフンのみ使用できます。例: `hello-world`")
+            return
+        
+        # スレッド名の長さチェック
+        if len(thread_name) > 50:
+            await ctx.send("❌ スレッド名は50文字以内にしてください。")
+            return
+        
+        # 返信先メッセージの確認
+        if not ctx.message.reference:
+            await ctx.send("❌ スレッド化したいメッセージに返信する形で `!cc <thread-name>` を実行してください。")
+            return
+        
+        try:
+            # 返信先メッセージを取得
+            parent_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            
+            # 既にスレッドの場合はエラー
+            if hasattr(parent_message.channel, 'parent'):
+                await ctx.send("❌ 既にスレッド内のメッセージです。")
+                return
+            
+            # スレッド名は引数として既に受け取っているため、そのまま使用
+            
+            # スレッドを作成
+            thread = await parent_message.create_thread(
+                name=thread_name,
+                auto_archive_duration=1440  # 24時間後に自動アーカイブ
+            )
+            
+            # Botがスレッドに参加
+            await thread.join()
+            
+            # セッション番号を割り当て
+            thread_id = str(thread.id)
+            session_num = settings.add_thread_session(thread_id)
+            
+            # Claude Codeセッションを開始（親メッセージコンテキスト付き）
+            await bot._start_claude_session_with_context(
+                session_num,
+                thread.name,
+                parent_message
+            )
+            
+            # スレッド内に最初の返信を投稿
+            initial_message = (
+                f"🧵 スレッドを作成しました！\n"
+                f"📝 Claude Code セッション #{session_num} を開始しました。\n\n"
+                f"このスレッドでメッセージを送信すると、Claude Codeに転送されます。"
+            )
+            await thread.send(initial_message)
+            
+            # 元のチャンネルでの確認メッセージは削除（スレッド内で完結させる）
+            try:
+                await ctx.message.delete()
+            except:
+                pass  # 削除権限がない場合は無視
+            
+            logger.info(f"Thread created via !cc command: {thread_name} (ID: {thread.id})")
+            
+        except discord.NotFound:
+            await ctx.send("❌ 返信先のメッセージが見つかりません。")
+        except discord.Forbidden:
+            await ctx.send("❌ スレッドを作成する権限がありません。")
+        except Exception as e:
+            logger.error(f"Error in /thread command: {e}", exc_info=True)
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
 
 def run_bot():
     """
