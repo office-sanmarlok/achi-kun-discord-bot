@@ -172,11 +172,16 @@ class SettingsManager:
         """設定ファイルを読み込み"""
         if self.settings_file.exists():
             with open(self.settings_file, 'r') as f:
-                return json.load(f)
+                settings = json.load(f)
+                # 既存の設定ファイルとの互換性を保つ
+                if 'post_target_channel' not in settings:
+                    settings['post_target_channel'] = None
+                return settings
         return {
             'thread_sessions': {},
             'registered_channels': [],
-            'ports': {'flask': 5001}
+            'ports': {'flask': 5001},
+            'post_target_channel': None
         }
     
     def _save_settings(self, settings: Dict):
@@ -227,6 +232,17 @@ class SettingsManager:
         thread_sessions = settings.get('thread_sessions', {})
         sessions = [(num, thread_id, 'thread') for thread_id, num in thread_sessions.items()]
         return sorted(sessions, key=lambda x: x[0])
+    
+    def get_post_target_channel(self) -> Optional[str]:
+        """送信先チャンネルIDを取得"""
+        settings = self._load_settings()
+        return settings.get('post_target_channel')
+    
+    def set_post_target_channel(self, channel_id: str):
+        """送信先チャンネルIDを設定"""
+        settings = self._load_settings()
+        settings['post_target_channel'] = channel_id
+        self._save_settings(settings)
     
     def is_configured(self) -> bool:
         """初期設定が完了しているかチェック"""

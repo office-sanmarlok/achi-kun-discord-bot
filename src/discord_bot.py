@@ -211,8 +211,12 @@ class ClaudeCLIBot(commands.Bot):
         if message.author == self.user:
             return
         
-        # Discord標準コマンドの処理
+        # Discord標準コマンドの処理（!で始まるコマンドを処理）
         await self.process_commands(message)
+        
+        # Claude Codeに転送すべきかチェック
+        if not self.should_forward_to_claude(message):
+            return
         
         # スレッド以外は処理しない
         if message.channel.type != discord.ChannelType.public_thread:
@@ -385,6 +389,28 @@ class ClaudeCLIBot(commands.Bot):
             await loading_msg.edit(content=result_text)
         except Exception as e:
             logger.error(f'メッセージ更新失敗: {e}')
+    
+    def should_forward_to_claude(self, message: discord.Message) -> bool:
+        """
+        メッセージをClaude Codeに転送すべきか判定
+        
+        Args:
+            message: Discordメッセージオブジェクト
+        
+        Returns:
+            bool: 転送する場合True、しない場合False
+        """
+        # Bot自身のメッセージは転送しない
+        if message.author == self.user:
+            return False
+        
+        # !で始まるメッセージは転送しない（コマンドとして処理）
+        if message.content.startswith('!'):
+            logger.info(f"Skipping Claude Code forwarding for command message: {message.content[:50]}")
+            return False
+        
+        # それ以外のメッセージは転送する
+        return True
     
     async def on_thread_create(self, thread):
         """
@@ -578,6 +604,42 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             lines.append(f"Session {num}: <#{channel_id}>")
         
         await ctx.send("\n".join(lines))
+    
+    @bot.command(name='post')
+    async def post_command(ctx, target_channel: discord.TextChannel = None):
+        """現在のスレッド名を指定チャンネルに送信
+        
+        使用方法: !post #チャンネル名
+        スレッド内でのみ使用可能
+        """
+        # スレッド内での実行かチェック
+        if not hasattr(ctx.channel, 'parent') or ctx.channel.parent is None:
+            await ctx.send("❌ このコマンドはスレッド内でのみ使用可能です")
+            return
+        
+        # チャンネルが指定されていない場合
+        if not target_channel:
+            await ctx.send("❌ 送信先チャンネルを指定してください。使用方法: `!post #チャンネル名`")
+            return
+        
+        # スレッド名を取得
+        thread_name = ctx.channel.name
+        
+        # メッセージを送信
+        try:
+            message_content = f"スレッド名: {thread_name}"
+            await target_channel.send(message_content)
+            
+            # 成功メッセージ
+            await ctx.send(f"✅ スレッド名を{target_channel.name}に送信しました")
+            logger.info(f"Posted thread name '{thread_name}' to channel {target_channel.id}")
+            
+        except discord.Forbidden:
+            await ctx.send("❌ 指定されたチャンネルへのアクセス権限がありません")
+            logger.error(f"Permission denied for channel {target_channel.id}")
+        except Exception as e:
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
+            logger.error(f"Error in !post command: {e}", exc_info=True)
     
     @bot.command(name='cc')
     async def cc_command(ctx, thread_name: str = None):
