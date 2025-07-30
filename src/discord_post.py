@@ -72,35 +72,29 @@ def main():
     if not sys.stdin.isatty():
         message = sys.stdin.read().strip()
         
-        # Check if channel ID is provided as argument
-        if len(sys.argv) > 1:
-            channel_arg = sys.argv[1]
-        else:
-            # Use default session
-            channel_arg = str(settings.get_default_session())
-        
-        # Determine if it's a session number, thread ID, or channel ID
-        if channel_arg.isdigit() and len(channel_arg) < 5:
-            # It's a session number - look up thread ID
-            thread_sessions = settings._load_settings().get('thread_sessions', {})
-            # Reverse lookup: session_num -> thread_id
-            thread_id = None
-            for tid, snum in thread_sessions.items():
-                if snum == int(channel_arg):
-                    thread_id = tid
-                    break
+        # Session number is required
+        if len(sys.argv) != 2:
+            print("Error: Session number required")
+            sys.exit(1)
             
-            if thread_id:
-                channel_id = thread_id
-            else:
-                # Fall back to old session channel lookup
-                channel_id = settings.get_session_channel(int(channel_arg))
-                if not channel_id:
-                    print(f"Error: Session {channel_arg} not configured")
-                    sys.exit(1)
-        else:
-            # It's a thread ID or channel ID
-            channel_id = channel_arg
+        session_num = int(sys.argv[1])
+        
+        # Look up thread ID from session number
+        thread_sessions = settings._load_settings().get('thread_sessions', {})
+        thread_id = None
+        for tid, snum in thread_sessions.items():
+            if snum == session_num:
+                thread_id = tid
+                break
+        
+        if not thread_id:
+            print(f"Error: Session {session_num} not found")
+            print("Available sessions:")
+            for tid, snum in thread_sessions.items():
+                print(f"  Session {snum}")
+            sys.exit(1)
+        
+        channel_id = thread_id
         
         # Post message
         if post_to_discord(channel_id, message):
@@ -109,7 +103,7 @@ def main():
         else:
             sys.exit(1)
     else:
-        print("Usage: echo 'message' | discord_post.py [session_number or channel_id]")
+        print("Usage: echo 'message' | discord_post.py <session_number>")
         sys.exit(1)
 
 if __name__ == "__main__":
