@@ -29,6 +29,7 @@ class SettingsManager:
                 self.config_dir = old_config_dir
                 self.env_file = self.config_dir / '.env'
                 self.sessions_file = self.config_dir / 'sessions.json'
+                self.settings_file = self.config_dir / 'settings.json'
                 self.toolkit_root = Path(__file__).parent.parent
                 return
         
@@ -36,6 +37,7 @@ class SettingsManager:
         self.config_dir = new_config_dir if new_config_dir.exists() or not old_config_dir.exists() else old_config_dir
         self.env_file = self.config_dir / '.env'
         self.sessions_file = self.config_dir / 'sessions.json'
+        self.settings_file = self.config_dir / 'settings.json'
         self.toolkit_root = Path(__file__).parent.parent
         
     def ensure_config_dir(self):
@@ -119,9 +121,8 @@ class SettingsManager:
         return False
     
     def list_sessions(self) -> List[tuple]:
-        """全セッションをリスト形式で取得"""
-        sessions = self.load_sessions()
-        return [(int(num), channel_id) for num, channel_id in sorted(sessions.items(), key=lambda x: int(x[0]))]
+        """全セッションをリスト形式で取得（スレッドセッションのみ）"""
+        return self.list_thread_sessions()
     
     def get_default_session(self) -> int:
         """デフォルトセッション番号を取得"""
@@ -144,6 +145,13 @@ class SettingsManager:
     
     def get_port(self, service: str = 'flask') -> int:
         """サービスのポート番号を取得"""
+        # 新しい設定ファイルから読み取る
+        settings = self._load_settings()
+        ports = settings.get('ports', {})
+        if service in ports:
+            return ports[service]
+        
+        # 互換性のため環境変数からも読み取る
         env_vars = self.load_env()
         port_map = {
             'flask': int(env_vars.get('FLASK_PORT', '5001'))  # macOS ControlCenter対策
@@ -160,12 +168,73 @@ class SettingsManager:
         env_vars = self.load_env()
         return env_vars.get('CLAUDE_OPTIONS', '')
     
+    def _load_settings(self) -> Dict:
+        """設定ファイルを読み込み"""
+        if self.settings_file.exists():
+            with open(self.settings_file, 'r') as f:
+                return json.load(f)
+        return {
+            'thread_sessions': {},
+            'registered_channels': [],
+            'ports': {'flask': 5001}
+        }
+    
+    def _save_settings(self, settings: Dict):
+        """設定ファイルを保存"""
+        self.ensure_config_dir()
+        with open(self.settings_file, 'w') as f:
+            json.dump(settings, f, indent=2)
+    
+    def is_channel_registered(self, channel_id: str) -> bool:
+        """チャンネルが登録済みか確認"""
+        settings = self._load_settings()
+        return channel_id in settings.get('registered_channels', [])
+    
+    def register_channel(self, channel_id: str):
+        """チャンネルを登録"""
+        settings = self._load_settings()
+        if 'registered_channels' not in settings:
+            settings['registered_channels'] = []
+        if channel_id not in settings['registered_channels']:
+            settings['registered_channels'].append(channel_id)
+            self._save_settings(settings)
+    
+    def thread_to_session(self, thread_id: str) -> Optional[int]:
+        """スレッドIDからセッション番号を取得"""
+        settings = self._load_settings()
+        thread_sessions = settings.get('thread_sessions', {})
+        return thread_sessions.get(thread_id)
+    
+    def add_thread_session(self, thread_id: str) -> int:
+        """新規スレッド用セッションを割り当て"""
+        settings = self._load_settings()
+        thread_sessions = settings.get('thread_sessions', {})
+        
+        # 次の利用可能なセッション番号を取得
+        existing_sessions = set(thread_sessions.values())
+        session_num = 1
+        while session_num in existing_sessions:
+            session_num += 1
+        
+        thread_sessions[thread_id] = session_num
+        settings['thread_sessions'] = thread_sessions
+        self._save_settings(settings)
+        return session_num
+    
+    def list_thread_sessions(self) -> List[tuple]:
+        """スレッドセッション一覧を返す"""
+        settings = self._load_settings()
+        thread_sessions = settings.get('thread_sessions', {})
+        sessions = [(num, thread_id, 'thread') for thread_id, num in thread_sessions.items()]
+        return sorted(sessions, key=lambda x: x[0])
+    
     def is_configured(self) -> bool:
         """初期設定が完了しているかチェック"""
+        settings = self._load_settings()
         return (self.env_file.exists() and 
                 self.get_token() is not None and 
                 self.get_token() != 'your_token_here' and
-                len(self.list_sessions()) > 0)
+                len(settings.get('registered_channels', [])) > 0)
 
 if __name__ == "__main__":
     # Test settings manager

@@ -51,10 +51,10 @@ def cmd_start():
     # Start Claude Code sessions
     work_dir = settings.get_claude_work_dir()
     claude_options = settings.get_claude_options()
-    sessions = settings.list_sessions()
+    sessions = settings.list_thread_sessions()
     
     print("  Starting Claude Code sessions...")
-    for session_num, channel_id in sessions:
+    for session_num, thread_id, type in sessions:
         if tmux.create_claude_session(session_num, work_dir, claude_options):
             time.sleep(1)  # Give each session time to start
         else:
@@ -131,15 +131,24 @@ def cmd_status():
     print(f"  Flask App: {'✅ Running' if is_service_running('flask_app') else '❌ Stopped'}")
     print(f"  tmux Session: {'✅ Active' if tmux.is_session_exists() else '❌ Inactive'}")
     
-    # Discord Sessions
-    print("\n💬 Discord Sessions:")
-    sessions = settings.list_sessions()
+    # Thread Sessions
+    print("\n🧵 Thread Sessions:")
+    sessions = settings.list_thread_sessions()
     if sessions:
-        for num, channel_id in sessions:
-            default = " (default)" if num == settings.get_default_session() else ""
-            print(f"  Session {num}: {channel_id}{default}")
+        for num, thread_id, type in sessions:
+            print(f"  Session {num}: Thread {thread_id}")
     else:
-        print("  No sessions configured")
+        print("  No thread sessions configured")
+    
+    # Registered Channels
+    print("\n📋 Registered Channels:")
+    settings_data = settings._load_settings()
+    registered = settings_data.get('registered_channels', [])
+    if registered:
+        for channel_id in registered:
+            print(f"  Channel: {channel_id}")
+    else:
+        print("  No channels registered")
     
     # Claude Sessions
     print("\n🤖 Claude Code Sessions:")
@@ -175,22 +184,29 @@ def cmd_doctor():
 def cmd_list_sessions():
     """セッション一覧を表示"""
     settings = SettingsManager()
-    sessions = settings.list_sessions()
+    sessions = settings.list_thread_sessions()
     
-    if not sessions:
-        print("No sessions configured.")
-        return
-    
-    print("📋 Configured Sessions:")
+    print("🧵 Thread Sessions:")
     print("=" * 40)
-    default_session = settings.get_default_session()
+    if sessions:
+        for num, thread_id, type in sessions:
+            print(f"Session {num}: Thread {thread_id}")
+    else:
+        print("No thread sessions configured.")
     
-    for num, channel_id in sessions:
-        default = " ⭐ (default)" if num == default_session else ""
-        print(f"Session {num}: {channel_id}{default}")
+    # Also show registered channels
+    print("\n📋 Registered Channels:")
+    print("=" * 40)
+    settings_data = settings._load_settings()
+    registered = settings_data.get('registered_channels', [])
+    if registered:
+        for channel_id in registered:
+            print(f"Channel: {channel_id}")
+    else:
+        print("No channels registered.")
 
 def cmd_add_session(channel_id: str):
-    """新しいセッションを追加"""
+    """チャンネルを登録（スレッド作成を監視対象に）"""
     settings = SettingsManager()
     
     # Validate channel ID
@@ -199,19 +215,19 @@ def cmd_add_session(channel_id: str):
         print("Channel IDs should be 15-20 digit numbers")
         return
     
-    # Check if already exists
-    existing_session = settings.channel_to_session(channel_id)
-    if existing_session:
-        print(f"⚠️  Channel {channel_id} is already configured as session {existing_session}")
+    # Check if already registered
+    if settings.is_channel_registered(channel_id):
+        print(f"⚠️  Channel {channel_id} is already registered")
         return
     
-    # Add session
-    session_num = settings.add_session(channel_id)
-    print(f"✅ Added channel {channel_id} as session {session_num}")
+    # Register channel
+    settings.register_channel(channel_id)
+    print(f"✅ Registered channel {channel_id}")
+    print(f"ℹ️  Threads created in this channel will now be monitored")
     
     # Update sessions list in memory if bot is running
     if is_service_running('discord_bot'):
-        print("ℹ️  Restart the bot to use the new session")
+        print("ℹ️  Restart the bot to apply changes")
 
 def cmd_view():
     """全セッションを1画面でリアルタイム表示"""
@@ -390,11 +406,11 @@ def print_usage():
     print("  vai status             Check service status")
     print("  vai doctor             Run environment diagnosis")
     print("  vai view               View all sessions in one screen")
-    print("  vai list-sessions      List configured sessions")
-    print("  vai add-session <id>   Add new Discord channel session")
+    print("  vai list-sessions      List thread sessions and registered channels")
+    print("  vai add-session <id>   Register a Discord channel for thread monitoring")
     print("\nOther commands:")
     print("  vexit                  Stop all services")
-    print("  dp [session] 'msg'     Send message to Discord")
+    print("  dp [session] 'msg'     Send message to Discord thread")
 
 def main():
     """メイン関数"""

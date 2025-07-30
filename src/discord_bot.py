@@ -21,6 +21,7 @@ import os
 import sys
 import json
 import asyncio
+import subprocess
 import logging
 import requests
 from pathlib import Path
@@ -37,7 +38,7 @@ except ImportError:
     sys.exit(1)
 
 from config.settings import SettingsManager
-from attachment_manager import AttachmentManager
+from src.attachment_manager import AttachmentManager
 
 # ログ設定（本番環境では外部設定ファイルから読み込み可能）
 logging.basicConfig(
@@ -126,6 +127,7 @@ class ClaudeCLIBot(commands.Bot):
         # Discord Bot設定
         intents = discord.Intents.default()
         intents.message_content = True  # メッセージ内容へのアクセス権限
+        intents.guilds = True  # ギルドイベント（on_thread_create等）へのアクセス権限
         
         super().__init__(command_prefix='!', intents=intents)
         
@@ -141,6 +143,14 @@ class ClaudeCLIBot(commands.Bot):
         """
         logger.info(f'{self.user} has connected to Discord!')
         print(f'✅ Discord bot is ready as {self.user}')
+        
+        # ギルドイベントの受信確認
+        if self.intents.guilds:
+            logger.info('Guild intents enabled - thread events will be received')
+            print('✅ Guild intents enabled - ready to receive thread events')
+        else:
+            logger.warning('Guild intents not enabled - thread events will NOT be received')
+            print('⚠️  Guild intents not enabled - thread events will NOT be received')
         
         # 初回システムクリーンアップ
         await self._perform_initial_cleanup()
@@ -176,16 +186,17 @@ class ClaudeCLIBot(commands.Bot):
         
     async def on_message(self, message):
         """
-        メッセージ受信時のメイン処理ハンドラー
+        メッセージ受信時のメイン処理ハンドラー（スレッドメッセージのみ処理）
         
         処理フロー：
         1. メッセージの事前検証
-        2. セッション確認
-        3. 即座のユーザーフィードバック
-        4. 添付ファイル処理
-        5. メッセージフォーマット
-        6. Claude Codeへの転送
-        7. 結果フィードバック
+        2. スレッドチェック
+        3. セッション確認・作成
+        4. 即座のユーザーフィードバック
+        5. 添付ファイル処理
+        6. メッセージフォーマット
+        7. Claude Codeへの転送
+        8. 結果フィードバック
         
         拡張ポイント：
         - メッセージ前処理フィルター
@@ -194,14 +205,33 @@ class ClaudeCLIBot(commands.Bot):
         - ログ記録
         - 統計収集
         """
-        # 基本的な検証
-        if not await self._validate_message(message):
+        # Bot自身のメッセージは無視
+        if message.author == self.user:
+            return
+        
+        # Discord標準コマンドの処理
+        await self.process_commands(message)
+        
+        # スレッド以外は処理しない
+        if message.channel.type != discord.ChannelType.public_thread:
             return
         
         # セッション確認
-        session_num = self.settings.channel_to_session(str(message.channel.id))
+        thread_id = str(message.channel.id)
+        session_num = self.settings.thread_to_session(thread_id)
+        
         if session_num is None:
-            return
+            # 既存スレッドで初回メッセージの場合
+            # （Bot起動前に作成されたスレッドへの対応）
+            parent_channel_id = str(message.channel.parent_id)
+            if self.settings.is_channel_registered(parent_channel_id):
+                session_num = self.settings.add_thread_session(thread_id)
+                await message.channel.join()  # スレッドに参加
+                await self._start_claude_session(session_num, message.channel.name)
+                logger.info(f"Created session {session_num} for existing thread {thread_id}")
+            else:
+                # 未登録チャンネルのスレッドは無視
+                return
         
         # ユーザーフィードバック（即座のローディング表示）
         loading_msg = await self._send_loading_feedback(message.channel)
@@ -353,6 +383,105 @@ class ClaudeCLIBot(commands.Bot):
             await loading_msg.edit(content=result_text)
         except Exception as e:
             logger.error(f'メッセージ更新失敗: {e}')
+    
+    async def on_thread_create(self, thread):
+        """
+        新規スレッド作成時の処理
+        
+        処理フロー：
+        1. 親チャンネルの確認
+        2. 登録済みチャンネルかチェック
+        3. スレッドに自動参加
+        4. セッション作成
+        5. 親メッセージ取得と初期コンテクスト設定
+        """
+        # 親チャンネルの確認
+        parent_channel_id = str(thread.parent_id)
+        if not self.settings.is_channel_registered(parent_channel_id):
+            logger.info(f"Ignored thread in unregistered channel: {parent_channel_id}")
+            return
+        
+        logger.info(f"New thread detected: {thread.name} (ID: {thread.id}) in registered channel")
+        
+        # スレッドに参加
+        try:
+            await thread.join()
+            logger.info(f"Joined thread: {thread.name} (ID: {thread.id})")
+            print(f"🧵 Joined new thread: {thread.name}")
+        except Exception as e:
+            logger.error(f"Failed to join thread {thread.id}: {e}")
+            # 参加失敗してもセッション作成は試行する
+        
+        # セッション作成
+        thread_id = str(thread.id)
+        session_num = self.settings.add_thread_session(thread_id)
+        logger.info(f"Assigned session {session_num} to thread {thread_id}")
+        
+        # 親メッセージ取得と初期コンテクスト設定
+        try:
+            parent_message = await thread.parent.fetch_message(thread.id)
+            logger.info(f"Fetched parent message for thread {thread_id}")
+            await self._start_claude_session_with_context(
+                session_num,
+                thread.name,
+                parent_message
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch parent message for thread {thread_id}: {e}")
+            # 親メッセージなしでもセッションは起動
+            await self._start_claude_session(session_num, thread.name)
+        
+        print(f"✅ New thread '{thread.name}' assigned to session {session_num}")
+    
+    async def _start_claude_session(self, session_num: int, thread_name: str):
+        """Claude Codeセッションを起動"""
+        session_name = f"claude-session-{session_num}"
+        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'claude', 'code']
+        
+        try:
+            subprocess.run(cmd, check=True)
+            logger.info(f"Started Claude Code session {session_num} for thread: {thread_name}")
+            print(f"🚀 Started Claude Code session {session_num}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to start Claude Code session: {e}")
+            print(f"❌ Failed to start Claude Code session {session_num}")
+    
+    async def _start_claude_session_with_context(self, session_num: int, 
+                                                thread_name: str, 
+                                                parent_message):
+        """親メッセージを初期コンテクストとしてセッションを起動"""
+        session_name = f"claude-session-{session_num}"
+        
+        # tmuxセッション起動
+        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'claude', 'code']
+        try:
+            subprocess.run(cmd, check=True)
+            logger.info(f"Started session {session_num} for thread: {thread_name}")
+            
+            # 初期コンテクストの送信（少し待機）
+            await asyncio.sleep(2)
+            
+            # 初期メッセージのフォーマット
+            context_message = (
+                f"=== スレッド: {thread_name} ===\\n"
+                f"親メッセージ作成者: {parent_message.author.name}\\n"
+                f"親メッセージ時刻: {parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S')}\\n"
+                f"親メッセージ内容:\\n{parent_message.content}\\n"
+                f"=== スレッド開始 ==="
+            )
+            
+            # tmuxにメッセージ送信
+            send_cmd = [
+                'tmux', 'send-keys', '-t', session_name, 
+                context_message, 'C-m'
+            ]
+            subprocess.run(send_cmd, check=True)
+            logger.info(f"Sent initial context to session {session_num}")
+            print(f"📝 Sent parent message context to session {session_num}")
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to start session or send context: {e}")
+            print(f"❌ Failed to setup session {session_num}")
     
     @tasks.loop(hours=CLEANUP_INTERVAL_HOURS)
     async def cleanup_task(self):
