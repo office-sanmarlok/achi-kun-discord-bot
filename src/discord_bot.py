@@ -489,6 +489,7 @@ class ClaudeCLIBot(commands.Bot):
             # 初期メッセージのフォーマット
             context_message = (
                 f"=== Discord スレッド情報 ===\\n"
+                f"チャンネル名: {parent_message.channel.parent.name}\\n"
                 f"スレッド名: {thread_name}\\n"
                 f"スレッドID: {parent_message.channel.id}\\n"
                 f"セッション番号: {session_num}\\n"
