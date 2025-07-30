@@ -230,11 +230,10 @@ class SettingsManager:
     
     def is_configured(self) -> bool:
         """初期設定が完了しているかチェック"""
-        settings = self._load_settings()
+        # 基本的な設定ファイルの存在とトークンの有無をチェック
         return (self.env_file.exists() and 
                 self.get_token() is not None and 
-                self.get_token() != 'your_token_here' and
-                len(settings.get('registered_channels', [])) > 0)
+                self.get_token() != 'your_token_here')
 
 if __name__ == "__main__":
     # Test settings manager

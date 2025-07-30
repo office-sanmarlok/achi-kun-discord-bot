@@ -79,15 +79,27 @@ def main():
             # Use default session
             channel_arg = str(settings.get_default_session())
         
-        # Determine if it's a session number or channel ID
+        # Determine if it's a session number, thread ID, or channel ID
         if channel_arg.isdigit() and len(channel_arg) < 5:
-            # It's a session number
-            channel_id = settings.get_session_channel(int(channel_arg))
-            if not channel_id:
-                print(f"Error: Session {channel_arg} not configured")
-                sys.exit(1)
+            # It's a session number - look up thread ID
+            thread_sessions = settings._load_settings().get('thread_sessions', {})
+            # Reverse lookup: session_num -> thread_id
+            thread_id = None
+            for tid, snum in thread_sessions.items():
+                if snum == int(channel_arg):
+                    thread_id = tid
+                    break
+            
+            if thread_id:
+                channel_id = thread_id
+            else:
+                # Fall back to old session channel lookup
+                channel_id = settings.get_session_channel(int(channel_arg))
+                if not channel_id:
+                    print(f"Error: Session {channel_arg} not configured")
+                    sys.exit(1)
         else:
-            # It's a channel ID
+            # It's a thread ID or channel ID
             channel_id = channel_arg
         
         # Post message

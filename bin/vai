@@ -8,6 +8,10 @@ import sys
 import subprocess
 import time
 from pathlib import Path
+import warnings
+
+# RequestsDependencyWarningを抑制
+warnings.filterwarnings('ignore', message='urllib3 .* or chardet .* doesn\'t match a supported')
 
 # Add parent directory to path for imports
 toolkit_root = Path(__file__).parent.parent
@@ -48,19 +52,9 @@ def cmd_start():
     
     tmux.create_panes()
     
-    # Start Claude Code sessions
-    work_dir = settings.get_claude_work_dir()
-    claude_options = settings.get_claude_options()
-    sessions = settings.list_thread_sessions()
-    
-    print("  Starting Claude Code sessions...")
-    for session_num, thread_id, type in sessions:
-        if tmux.create_claude_session(session_num, work_dir, claude_options):
-            time.sleep(1)  # Give each session time to start
-        else:
-            print(f"  ⚠️  Failed to start Claude session {session_num}")
-    
-    print(f"  Started {len(sessions)} Claude Code sessions")
+    # Don't start Claude Code sessions automatically
+    # Sessions will be created on-demand when threads are created
+    print("  Claude Code sessions will be created when Discord threads are created")
     
     # Get paths
     src_dir = toolkit_root / 'src'
@@ -88,13 +82,11 @@ def cmd_start():
     
     print("\n✅ All services started successfully!")
     
-    # Show Claude sessions
-    claude_sessions = tmux.list_claude_sessions()
-    if claude_sessions:
-        print(f"\n🤖 Claude Code Sessions:")
-        for num, session_name in claude_sessions:
-            default = " ⭐ (default)" if num == settings.get_default_session() else ""
-            print(f"  Session {num}: {session_name}{default}")
+    # Show registered channels
+    settings_data = settings._load_settings()
+    registered = settings_data.get('registered_channels', [])
+    if registered:
+        print(f"\n📋 Monitoring {len(registered)} channel(s) for thread creation")
     
     print("\nUsage:")
     print("  vai status    - Check service status")
@@ -105,12 +97,6 @@ def cmd_start():
     
     # Offer to attach to tmux
     print(f"\nTo view services: tmux attach -t {tmux.session_name}")
-    if claude_sessions:
-        print("To view Claude sessions:")
-        for num, session_name in claude_sessions[:3]:  # Show first 3
-            print(f"  tmux attach -t {session_name}")
-        if len(claude_sessions) > 3:
-            print(f"  ... and {len(claude_sessions) - 3} more")
 
 def cmd_status():
     """サービスの状態を確認"""

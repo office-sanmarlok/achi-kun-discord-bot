@@ -436,7 +436,13 @@ class ClaudeCLIBot(commands.Bot):
     async def _start_claude_session(self, session_num: int, thread_name: str):
         """Claude Codeセッションを起動"""
         session_name = f"claude-session-{session_num}"
-        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'claude', 'code']
+        # オプションを取得
+        work_dir = self.settings.get_claude_work_dir()
+        claude_options = self.settings.get_claude_options()
+        
+        # claudeコマンドを構築
+        claude_cmd = f"cd {work_dir} && claude {claude_options}".strip()
+        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         
         try:
             subprocess.run(cmd, check=True)
@@ -452,8 +458,15 @@ class ClaudeCLIBot(commands.Bot):
         """親メッセージを初期コンテクストとしてセッションを起動"""
         session_name = f"claude-session-{session_num}"
         
+        # オプションを取得
+        work_dir = self.settings.get_claude_work_dir()
+        claude_options = self.settings.get_claude_options()
+        
+        # claudeコマンドを構築
+        claude_cmd = f"cd {work_dir} && claude {claude_options}".strip()
+        
         # tmuxセッション起動
-        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'claude', 'code']
+        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         try:
             subprocess.run(cmd, check=True)
             logger.info(f"Started session {session_num} for thread: {thread_name}")
@@ -463,11 +476,19 @@ class ClaudeCLIBot(commands.Bot):
             
             # 初期メッセージのフォーマット
             context_message = (
-                f"=== スレッド: {thread_name} ===\\n"
-                f"親メッセージ作成者: {parent_message.author.name}\\n"
-                f"親メッセージ時刻: {parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S')}\\n"
-                f"親メッセージ内容:\\n{parent_message.content}\\n"
-                f"=== スレッド開始 ==="
+                f"=== Discord スレッド情報 ===\\n"
+                f"スレッド名: {thread_name}\\n"
+                f"スレッドID: {parent_message.channel.id}\\n"
+                f"セッション番号: {session_num}\\n"
+                f"\\n"
+                f"【重要】このセッションはDiscordのスレッド専用です。\\n"
+                f"メッセージ送信は: dp {session_num} \\\"メッセージ\\\"\\n"
+                f"\\n"
+                f"=== 親メッセージ ===\\n"
+                f"作成者: {parent_message.author.name}\\n"
+                f"時刻: {parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S')}\\n"
+                f"内容:\\n{parent_message.content}\\n"
+                f"==================="
             )
             
             # tmuxにメッセージ送信

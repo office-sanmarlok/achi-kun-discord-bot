@@ -210,7 +210,7 @@ EOF
     
     chmod 600 "$CONFIG_DIR/.env"
     
-    # Create sessions.json
+    # Create sessions.json for backward compatibility
     echo "{" > "$CONFIG_DIR/sessions.json"
     for i in "${!SESSIONS[@]}"; do
         IFS=':' read -r num channel <<< "${SESSIONS[$i]}"
@@ -220,6 +220,32 @@ EOF
         fi
     done
     echo "}" >> "$CONFIG_DIR/sessions.json"
+    
+    # Create settings.json for new thread-based system
+    cat > "$CONFIG_DIR/settings.json" << EOF
+{
+  "thread_sessions": {},
+  "registered_channels": [],
+  "ports": {
+    "flask": 5001
+  }
+}
+EOF
+    
+    # Add configured channels to registered_channels
+    for i in "${!SESSIONS[@]}"; do
+        IFS=':' read -r num channel <<< "${SESSIONS[$i]}"
+        # Update settings.json to add channel to registered_channels
+        python3 -c "
+import json
+with open('$CONFIG_DIR/settings.json', 'r') as f:
+    settings = json.load(f)
+if '$channel' not in settings['registered_channels']:
+    settings['registered_channels'].append('$channel')
+with open('$CONFIG_DIR/settings.json', 'w') as f:
+    json.dump(settings, f, indent=2)
+"
+    done
     
     print_success "Configuration saved"
 }
