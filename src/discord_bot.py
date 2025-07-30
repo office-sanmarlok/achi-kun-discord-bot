@@ -222,15 +222,10 @@ class ClaudeCLIBot(commands.Bot):
         if session_num is None:
             # 既存スレッドで初回メッセージの場合
             # （Bot起動前に作成されたスレッドへの対応）
-            parent_channel_id = str(message.channel.parent_id)
-            if self.settings.is_channel_registered(parent_channel_id):
-                session_num = self.settings.add_thread_session(thread_id)
-                await message.channel.join()  # スレッドに参加
-                await self._start_claude_session(session_num, message.channel.name)
-                logger.info(f"Created session {session_num} for existing thread {thread_id}")
-            else:
-                # 未登録チャンネルのスレッドは無視
-                return
+            session_num = self.settings.add_thread_session(thread_id)
+            await message.channel.join()  # スレッドに参加
+            await self._start_claude_session(session_num, message.channel.name)
+            logger.info(f"Created session {session_num} for existing thread {thread_id}")
         
         # ユーザーフィードバック（即座のローディング表示）
         loading_msg = await self._send_loading_feedback(message.channel)
@@ -426,7 +421,8 @@ class ClaudeCLIBot(commands.Bot):
     
     async def _start_claude_session_with_context(self, session_num: int, 
                                                 thread_name: str, 
-                                                parent_message):
+                                                parent_message,
+                                                thread):
         """親メッセージを初期コンテクストとしてセッションを起動"""
         session_name = f"claude-session-{session_num}"
         
@@ -449,9 +445,9 @@ class ClaudeCLIBot(commands.Bot):
             # 初期メッセージのフォーマット
             context_message = (
                 f"=== Discord スレッド情報 ===\\n"
-                f"チャンネル名: {parent_message.channel.parent.name}\\n"
+                f"チャンネル名: {parent_message.channel.name}\\n"
                 f"スレッド名: {thread_name}\\n"
-                f"スレッドID: {parent_message.channel.id}\\n"
+                f"スレッドID: {thread.id}\\n"
                 f"セッション番号: {session_num}\\n"
                 f"\\n"
                 f"【重要】このセッションはDiscordのスレッド専用です。\\n"
@@ -608,7 +604,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             parent_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
             
             # 既にスレッドの場合はエラー
-            if hasattr(parent_message.channel, 'parent'):
+            if parent_message.channel.type == discord.ChannelType.public_thread:
                 await ctx.send("❌ 既にスレッド内のメッセージです。")
                 return
             
@@ -630,7 +626,8 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             await bot._start_claude_session_with_context(
                 session_num,
                 thread.name,
-                parent_message
+                parent_message,
+                thread
             )
             
             # スレッド内に最初の返信を投稿
@@ -656,6 +653,61 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         except Exception as e:
             logger.error(f"Error in /thread command: {e}", exc_info=True)
             await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
+    
+    @bot.command(name='filegen')
+    async def filegen_command(ctx, file_name: str = None):
+        """指定された名前でprojectsディレクトリ内にサブディレクトリを作成
+        
+        使用方法: !filegen <file-name>
+        file-name: 小文字アルファベットとハイフンのみ使用可能
+        """
+        
+        # ファイル名の必須チェック
+        if not file_name:
+            await ctx.send("❌ ファイル名を指定してください。使用方法: `!filegen <file-name>`")
+            return
+        
+        # ファイル名のバリデーション（小文字アルファベットとハイフンのみ）
+        if not re.match(r'^[a-z]+(-[a-z]+)*$', file_name):
+            await ctx.send("❌ ファイル名は小文字アルファベットとハイフンのみ使用できます。例: `my-project`")
+            return
+        
+        # ファイル名の長さチェック
+        if len(file_name) > 50:
+            await ctx.send("❌ ファイル名は50文字以内にしてください。")
+            return
+        
+        try:
+            # プロジェクトのルートディレクトリを取得
+            project_root = Path(__file__).parent.parent
+            projects_dir = project_root / 'projects'
+            
+            # projectsディレクトリが存在しない場合は作成
+            if not projects_dir.exists():
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created projects directory: {projects_dir}")
+            
+            # 作成するディレクトリのパス
+            target_dir = projects_dir / file_name
+            
+            # 既に存在する場合はエラー
+            if target_dir.exists():
+                await ctx.send(f"❌ ディレクトリ `{file_name}` は既に存在します。")
+                return
+            
+            # ディレクトリを作成
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 成功メッセージ
+            await ctx.send(f"✅ ディレクトリ `./projects/{file_name}` を作成しました。")
+            logger.info(f"Created directory: {target_dir}")
+            
+        except PermissionError:
+            await ctx.send("❌ ディレクトリを作成する権限がありません。")
+            logger.error(f"Permission denied creating directory: {file_name}")
+        except Exception as e:
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
+            logger.error(f"Error in !filegen command: {e}", exc_info=True)
 
 def run_bot():
     """
