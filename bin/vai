@@ -67,7 +67,7 @@ def cmd_start():
     
     # Start Discord bot in pane 0
     print("  Starting Discord bot...")
-    tmux.send_command("0.0", f"cd {src_dir} && python3 discord_bot.py")
+    tmux.send_command("0.0", f"cd {toolkit_root} && python3 src/discord_bot.py")
     time.sleep(2)  # Give bot time to start
     
     # Start Flask app in pane 1
@@ -81,7 +81,7 @@ def cmd_start():
         print(f"  Using port {flask_port}")
     
     print("  Starting Flask app...")
-    tmux.send_command("0.1", f"cd {src_dir} && python3 flask_app.py")
+    tmux.send_command("0.1", f"cd {toolkit_root} && python3 src/flask_app.py")
     
     # Third pane for monitoring
     tmux.send_command("0.2", "echo 'Claude-Discord Bridge - Monitoring'")
