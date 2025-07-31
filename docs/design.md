@@ -78,15 +78,16 @@ class SettingsManager:
         # 既存のチャンネル管理から移行
         self.channel_sessions = {}  # 廃止予定
         self.thread_sessions = {}   # thread_id -> session_number
-        self.registered_channels = []  # 登録済みチャンネルID一覧
+        # self.registered_channels = []  # 未実装・廃止
 ```
 
 #### 3.1.2 新規メソッド
 
 ```python
-def is_channel_registered(self, channel_id: str) -> bool:
-    """チャンネルが登録済みか確認"""
-    return channel_id in self.registered_channels
+# 未実装・廃止
+# def is_channel_registered(self, channel_id: str) -> bool:
+#     """チャンネルが登録済みか確認"""
+#     return channel_id in self.registered_channels
 
 def thread_to_session(self, thread_id: str) -> Optional[int]:
     """スレッドIDからセッション番号を取得"""
@@ -128,11 +129,9 @@ def __init__(self, settings_manager: SettingsManager):
 ```python
 async def on_thread_create(self, thread):
     """新規スレッド作成時の処理"""
-    # 親チャンネルの確認
+    # registered_channels機能は未実装のため、全てのスレッドを処理
     parent_channel_id = str(thread.parent_id)
-    if not self.settings.is_channel_registered(parent_channel_id):
-        logger.info(f"Ignored thread in unregistered channel: {parent_channel_id}")
-        return
+    logger.info(f"Processing thread in channel: {parent_channel_id}")
     
     # スレッドに参加
     await thread.join()
@@ -213,13 +212,10 @@ async def on_message(self, message):
     if session_num is None:
         # 既存スレッドで初回メッセージの場合
         # （Bot起動前に作成されたスレッドへの対応）
-        parent_channel_id = str(message.channel.parent_id)
-        if self.settings.is_channel_registered(parent_channel_id):
-            session_num = self.settings.add_thread_session(thread_id)
-            await message.channel.join()  # スレッドに参加
-            await self._start_claude_session(session_num, message.channel.name)
-        else:
-            return
+        # registered_channels機能は未実装のため、全てのスレッドを処理
+        session_num = self.settings.add_thread_session(thread_id)
+        await message.channel.join()  # スレッドに参加
+        await self._start_claude_session(session_num, message.channel.name)
     
     # 以降は既存の処理と同様
     loading_msg = await self._send_loading_feedback(message.channel)
@@ -257,7 +253,6 @@ list_sessions() {
 ```json
 {
     "discord_token": "...",
-    "registered_channels": ["channel_id_1", "channel_id_2"],
     "thread_sessions": {
         "thread_id_1": 1,
         "thread_id_2": 2
@@ -268,6 +263,8 @@ list_sessions() {
     }
 }
 ```
+
+注: `registered_channels`フィールドは設計段階のもので、実装されていません。
 
 ### 4.2 セッション情報
 
@@ -284,7 +281,7 @@ list_sessions() {
 
 | エラー状況 | 処理 |
 |-----------|------|
-| 親チャンネル未登録 | ログ記録して処理スキップ |
+| ~~親チャンネル未登録~~ | ~~ログ記録して処理スキップ~~（registered_channels機能は未実装） |
 | thread.join() 失敗 | エラーログ記録、処理継続 |
 | 親メッセージ取得失敗 | コンテクストなしでセッション起動 |
 | tmux セッション起動失敗 | エラーログ記録、ユーザーに通知 |
@@ -317,7 +314,6 @@ list_sessions() {
    - Bot 再起動後の既存スレッド処理
 
 2. **エラーシナリオ**
-   - 未登録チャンネルでのスレッド作成
    - tmux セッション上限到達時の動作
 
 ### 6.3 手動テスト項目
@@ -334,7 +330,7 @@ list_sessions() {
 1. **設定ファイルの変更**
    - `channel_sessions` を削除
    - `thread_sessions` を新規追加
-   - `registered_channels` を新規追加
+   - ~~`registered_channels` を新規追加~~（未実装）
 
 2. **即時切り替え**
    - チャンネルベースの処理を完全に削除
@@ -343,7 +339,7 @@ list_sessions() {
 ## 8. セキュリティ考慮事項
 
 1. **権限管理**
-   - 登録チャンネルのみでスレッド作成を受け付ける
+   - ~~登録チャンネルのみでスレッド作成を受け付ける~~（registered_channels機能は未実装）
    - Bot の権限は最小限に設定
 
 2. **リソース制限**

@@ -66,12 +66,9 @@ def ensure_executable(file_path: Path):
 
 def create_pid_file(service_name: str, pid: int) -> Path:
     """PIDファイルを作成"""
-    # Support both old and new config directory names for backward compatibility
-    old_config_dir = Path.home() / '.claude-cli-toolkit'
-    new_config_dir = Path.home() / '.claude-discord-bridge'
-    
-    config_dir = new_config_dir if new_config_dir.exists() else old_config_dir
-    pid_dir = config_dir / 'run'
+    # プロジェクトディレクトリのrunディレクトリを使用
+    project_root = Path(__file__).parent.parent
+    pid_dir = project_root / 'run'
     pid_dir.mkdir(parents=True, exist_ok=True)
     
     pid_file = pid_dir / f"{service_name}.pid"
@@ -80,12 +77,9 @@ def create_pid_file(service_name: str, pid: int) -> Path:
 
 def read_pid_file(service_name: str) -> Optional[int]:
     """PIDファイルを読み込み"""
-    # Support both old and new config directory names for backward compatibility
-    old_config_dir = Path.home() / '.claude-cli-toolkit'
-    new_config_dir = Path.home() / '.claude-discord-bridge'
-    
-    config_dir = new_config_dir if new_config_dir.exists() else old_config_dir
-    pid_file = config_dir / 'run' / f"{service_name}.pid"
+    # プロジェクトディレクトリのrunディレクトリを使用
+    project_root = Path(__file__).parent.parent
+    pid_file = project_root / 'run' / f"{service_name}.pid"
     if pid_file.exists():
         try:
             return int(pid_file.read_text().strip())
@@ -95,12 +89,9 @@ def read_pid_file(service_name: str) -> Optional[int]:
 
 def remove_pid_file(service_name: str):
     """PIDファイルを削除"""
-    # Support both old and new config directory names for backward compatibility
-    old_config_dir = Path.home() / '.claude-cli-toolkit'
-    new_config_dir = Path.home() / '.claude-discord-bridge'
-    
-    config_dir = new_config_dir if new_config_dir.exists() else old_config_dir
-    pid_file = config_dir / 'run' / f"{service_name}.pid"
+    # プロジェクトディレクトリのrunディレクトリを使用
+    project_root = Path(__file__).parent.parent
+    pid_file = project_root / 'run' / f"{service_name}.pid"
     if pid_file.exists():
         pid_file.unlink()
 

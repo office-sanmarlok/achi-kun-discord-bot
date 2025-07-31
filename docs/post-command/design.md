@@ -115,7 +115,6 @@ def set_post_target_channel(self, channel_id: str):
 ```json
 {
     "thread_sessions": {},
-    "registered_channels": [],
     "ports": {},
     "post_target_channel": "CHANNEL_ID"  // 新規追加
 }

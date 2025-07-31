@@ -41,6 +41,7 @@ except ImportError:
 
 from config.settings import SettingsManager
 from src.attachment_manager import AttachmentManager
+from src.session_manager import get_session_manager
 
 # ログ設定（本番環境では外部設定ファイルから読み込み可能）
 logging.basicConfig(
@@ -217,12 +218,14 @@ class ClaudeCLIBot(commands.Bot):
         
         # セッション確認
         thread_id = str(message.channel.id)
-        session_num = self.settings.thread_to_session(thread_id)
+        session_manager = get_session_manager()
         
-        if session_num is None:
-            # 既存スレッドで初回メッセージの場合
-            # （Bot起動前に作成されたスレッドへの対応）
-            session_num = self.settings.add_thread_session(thread_id)
+        # 既存セッションがあるか確認
+        existing_session = session_manager.get_session(thread_id)
+        session_num = session_manager.get_or_create_session(thread_id)
+        
+        # 新規セッションの場合、Claude Codeセッションを開始
+        if existing_session is None:  # 今作成された場合
             await message.channel.join()  # スレッドに参加
             await self._start_claude_session(session_num, message.channel.name)
             logger.info(f"Created session {session_num} for existing thread {thread_id}")
@@ -620,7 +623,8 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             
             # セッション番号を割り当て
             thread_id = str(thread.id)
-            session_num = settings.add_thread_session(thread_id)
+            session_manager = get_session_manager()
+            session_num = session_manager.get_or_create_session(thread_id)
             
             # Claude Codeセッションを開始（親メッセージコンテキスト付き）
             await bot._start_claude_session_with_context(

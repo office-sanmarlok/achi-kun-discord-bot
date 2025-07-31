@@ -21,6 +21,7 @@ from src.environment import EnvironmentDetector
 from src.tmux_manager import TmuxManager
 from src.attachment_manager import AttachmentManager
 from config.settings import SettingsManager
+from src.session_manager import get_session_manager
 from lib.utils import (
     is_service_running, create_pid_file, stop_service,
     find_available_port, is_port_in_use
@@ -113,9 +114,10 @@ def cmd_status():
     
     # Thread Sessions
     print("\n🧵 Thread Sessions:")
-    sessions = settings.list_thread_sessions()
+    session_manager = get_session_manager()
+    sessions = session_manager.list_sessions()
     if sessions:
-        for num, thread_id, type in sessions:
+        for num, thread_id in sessions:
             print(f"  Session {num}: Thread {thread_id}")
     else:
         print("  No thread sessions configured")
@@ -153,13 +155,13 @@ def cmd_doctor():
 
 def cmd_list_sessions():
     """セッション一覧を表示"""
-    settings = SettingsManager()
-    sessions = settings.list_thread_sessions()
+    session_manager = get_session_manager()
+    sessions = session_manager.list_sessions()
     
     print("🧵 Thread Sessions:")
     print("=" * 40)
     if sessions:
-        for num, thread_id, type in sessions:
+        for num, thread_id in sessions:
             print(f"Session {num}: Thread {thread_id}")
     else:
         print("No thread sessions configured.")

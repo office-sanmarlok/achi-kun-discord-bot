@@ -6,10 +6,10 @@
 - `config/settings.py` を更新
 - 新しいデータ構造：
   - `thread_sessions`: スレッドID → セッション番号のマッピング
-  - `registered_channels`: 監視対象チャンネルのリスト
+  - `registered_channels`: 監視対象チャンネルのリスト（未実装・廃止）
 - 新しいメソッド：
-  - `is_channel_registered()`: チャンネル登録確認
-  - `register_channel()`: チャンネル登録
+  - `is_channel_registered()`: チャンネル登録確認（未実装・廃止）
+  - `register_channel()`: チャンネル登録（未実装・廃止）
   - `thread_to_session()`: スレッドのセッション取得
   - `add_thread_session()`: 新規スレッドセッション作成
   - `list_thread_sessions()`: スレッドセッション一覧
@@ -22,7 +22,7 @@
 
 ### 3. スレッド作成検出機能 ✅
 - `on_thread_create` イベントハンドラー実装
-- 登録済みチャンネル内のスレッドのみ処理
+- ~~登録済みチャンネル内のスレッドのみ処理~~（registered_channels機能は未実装のため、全チャンネルのスレッドを処理）
 - 自動的にスレッドに参加（`thread.join()`）
 - 新規セッション番号の割り当て
 
@@ -40,8 +40,8 @@
 
 ### 6. セッション管理機能の拡張 ✅
 - `bin/vai` コマンドを更新：
-  - `vai list-sessions`: スレッドセッションと登録チャンネル表示
-  - `vai add-session <id>`: チャンネル登録コマンドに変更
+  - `vai list-sessions`: スレッドセッション表示
+  - ~~`vai add-session <id>`: チャンネル登録コマンドに変更~~（registered_channels機能は未実装）
   - `vai status`: スレッドセッション表示対応
 - 使用方法の説明を更新
 
@@ -73,13 +73,10 @@
 
 ## 動作フロー
 
-1. **チャンネル登録**
-   ```bash
-   vai add-session 123456789012345678
-   ```
+~~1. **チャンネル登録**~~（registered_channels機能は未実装）
 
 2. **スレッド作成時**
-   - 登録済みチャンネルでスレッドが作成される
+   - 任意のチャンネルでスレッドが作成される
    - Bot が on_thread_create イベントを受信
    - 自動的にスレッドに参加
    - 新しいClaude Codeセッションを起動
@@ -95,7 +92,6 @@
 ```json
 {
     "discord_token": "...",
-    "registered_channels": ["123456789012345678"],
     "thread_sessions": {
         "987654321098765432": 1,
         "876543210987654321": 2
@@ -105,6 +101,8 @@
     }
 }
 ```
+
+注: `registered_channels`フィールドは設計段階のもので、実装されていません。
 
 ## 今後の改善案
 
@@ -124,15 +122,12 @@
 
 1. **環境準備**
    ```bash
-   # チャンネル登録
-   vai add-session <channel_id>
-   
    # Bot起動
    vai
    ```
 
 2. **動作確認**
-   - Discordで登録チャンネル内にスレッドを作成
+   - Discordの任意のチャンネルでスレッドを作成
    - スレッド内でメッセージを送信
    - Claude Codeセッションが自動起動することを確認
    - 親メッセージが初期コンテクストとして表示されることを確認

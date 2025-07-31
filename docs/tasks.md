@@ -3,8 +3,8 @@
 ## 実装タスク一覧
 
 - [ ] 1. 設定管理の基盤実装
-  - settings.py を更新して thread_sessions と registered_channels のデータ構造を追加
-  - is_channel_registered(), thread_to_session(), add_thread_session() メソッドを実装
+  - settings.py を更新して thread_sessions のデータ構造を追加
+  - ~~is_channel_registered()~~, thread_to_session(), add_thread_session() メソッドを実装（registered_channels関連は未実装）
   - 既存の channel_sessions 関連コードを削除
   - 単体テストを作成して設定の読み書きを検証
   - _要件: 3.1, 3.4_
@@ -17,8 +17,8 @@
 - [ ] 3. スレッド作成検出機能の実装
   - [ ] 3.1 on_thread_create イベントハンドラーの基本実装
     - discord_bot.py に on_thread_create メソッドを追加
-    - 親チャンネルIDの取得と registered_channels での確認処理を実装
-    - 未登録チャンネルの場合はログ出力して処理をスキップ
+    - ~~親チャンネルIDの取得と registered_channels での確認処理を実装~~（registered_channels機能は未実装）
+    - 全てのスレッドを処理
     - _要件: 3.1_
   
   - [ ] 3.2 スレッド自動参加機能の実装
@@ -102,7 +102,7 @@
 
 - [ ] 10. 設定ファイルとドキュメントの更新
   - [ ] 10.1 設定ファイル構造の変更
-    - settings.json のサンプルを新構造に更新
+    - settings.json のサンプルを新構造に更新（registered_channelsを除いて）
     - マイグレーションスクリプトの作成（既存設定がある場合）
     - _要件: 3.1, 3.4, 3.5_
   

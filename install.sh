@@ -119,17 +119,12 @@ setup_config() {
     echo ""
     print_info "Setting up configuration..."
     
-    # Migration from old config directory name
-    OLD_CONFIG_DIR="$HOME/.claude-cli-toolkit"
-    CONFIG_DIR="$HOME/.claude-discord-bridge"
+    # Use project directory for configuration
+    CONFIG_DIR="$TOOLKIT_ROOT"
     
-    # Migrate if old exists and new doesn't
-    if [ -d "$OLD_CONFIG_DIR" ] && [ ! -d "$CONFIG_DIR" ]; then
-        mv "$OLD_CONFIG_DIR" "$CONFIG_DIR"
-        print_success "Migrated config directory: $OLD_CONFIG_DIR → $CONFIG_DIR"
-    fi
-    
-    mkdir -p "$CONFIG_DIR"
+    # Create necessary directories
+    mkdir -p "$CONFIG_DIR/run"
+    mkdir -p "$CONFIG_DIR/attachments"
     
     # Check if already configured
     if [[ -f "$CONFIG_DIR/.env" ]]; then
@@ -177,24 +172,12 @@ setup_config() {
 # This file contains sensitive information. Do not share!
 
 DISCORD_BOT_TOKEN=$DISCORD_TOKEN
-DEFAULT_SESSION=1
 FLASK_PORT=5001
 CLAUDE_WORK_DIR=$CLAUDE_WORK_DIR
 CLAUDE_OPTIONS=$CLAUDE_OPTIONS
 EOF
     
     chmod 600 "$CONFIG_DIR/.env"
-    
-    # Create settings.json for new thread-based system
-    cat > "$CONFIG_DIR/settings.json" << EOF
-{
-  "thread_sessions": {},
-  "ports": {
-    "flask": 5001
-  }
-}
-EOF
-    
     
     print_success "Configuration saved"
 }
@@ -256,7 +239,6 @@ ENV/
 
 # Configuration
 .env
-sessions.json
 
 # Runtime
 *.pid

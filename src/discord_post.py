@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import SettingsManager
+from src.session_manager import get_session_manager
 
 def post_to_discord(channel_id: str, message: str):
     """Post a message to Discord channel"""
@@ -80,18 +81,14 @@ def main():
         session_num = int(sys.argv[1])
         
         # Look up thread ID from session number
-        thread_sessions = settings._load_settings().get('thread_sessions', {})
-        thread_id = None
-        for tid, snum in thread_sessions.items():
-            if snum == session_num:
-                thread_id = tid
-                break
+        session_manager = get_session_manager()
+        thread_id = session_manager.find_thread_by_session(session_num)
         
         if not thread_id:
             print(f"Error: Session {session_num} not found")
             print("Available sessions:")
-            for tid, snum in thread_sessions.items():
-                print(f"  Session {snum}")
+            for num, tid in session_manager.list_sessions():
+                print(f"  Session {num}")
             sys.exit(1)
         
         channel_id = thread_id

@@ -63,7 +63,6 @@ print(f"送信先チャンネルID: {channel_id}")
 ```json
 {
     "thread_sessions": {},
-    "registered_channels": [],
     "ports": {"flask": 5001},
     "post_target_channel": "チャンネルID"
 }
