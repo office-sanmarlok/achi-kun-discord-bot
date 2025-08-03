@@ -14,7 +14,56 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import SettingsManager
-from src.session_manager import get_session_manager
+
+def get_session_info_from_api(session_num: int, flask_port: int = 5001):
+    """
+    Flask APIからセッション情報を取得
+    
+    Args:
+        session_num: セッション番号
+        flask_port: Flask APIのポート番号
+    
+    Returns:
+        セッション情報の辞書、エラー時はNone
+    """
+    try:
+        url = f"http://localhost:{flask_port}/session/{session_num}"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+            return None
+        else:
+            print(f"Error: Flask API returned status {response.status_code}")
+            return None
+    except requests.exceptions.ConnectionError:
+        print("Error: Failed to connect to Flask API. Make sure 'vai' is running.")
+        return None
+    except Exception as e:
+        print(f"Error connecting to Flask API: {e}")
+        return None
+
+def get_sessions_list_from_api(flask_port: int = 5001):
+    """
+    Flask APIからセッション一覧を取得
+    
+    Args:
+        flask_port: Flask APIのポート番号
+    
+    Returns:
+        セッション一覧、エラー時はNone
+    """
+    try:
+        url = f"http://localhost:{flask_port}/sessions"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            return response.json().get('sessions', [])
+        else:
+            return None
+    except:
+        return None
 
 def post_to_discord(channel_id: str, message: str):
     """Post a message to Discord channel"""
@@ -79,19 +128,25 @@ def main():
             sys.exit(1)
             
         session_num = int(sys.argv[1])
+        flask_port = settings.get_port('flask')
         
-        # Look up thread ID from session number
-        session_manager = get_session_manager()
-        thread_id = session_manager.find_thread_by_session(session_num)
+        # Look up session info from Flask API
+        session_info = get_session_info_from_api(session_num, flask_port)
         
-        if not thread_id:
+        if not session_info:
             print(f"Error: Session {session_num} not found")
-            print("Available sessions:")
-            for num, tid in session_manager.list_sessions():
-                print(f"  Session {num}")
+            
+            # Try to get available sessions
+            sessions = get_sessions_list_from_api(flask_port)
+            if sessions:
+                print("Available sessions:")
+                for session in sessions:
+                    print(f"  Session {session['session_num']}")
+            else:
+                print("Could not retrieve session list from Flask API")
             sys.exit(1)
         
-        channel_id = thread_id
+        channel_id = session_info['thread_id']
         
         # Post message
         if post_to_discord(channel_id, message):

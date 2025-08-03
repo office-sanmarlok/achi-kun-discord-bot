@@ -21,11 +21,11 @@ from src.environment import EnvironmentDetector
 from src.tmux_manager import TmuxManager
 from src.attachment_manager import AttachmentManager
 from config.settings import SettingsManager
-from src.session_manager import get_session_manager
 from lib.utils import (
     is_service_running, create_pid_file, stop_service,
     find_available_port, is_port_in_use
 )
+import requests
 
 def cmd_start():
     """サービスを起動"""
@@ -114,13 +114,26 @@ def cmd_status():
     
     # Thread Sessions
     print("\n🧵 Thread Sessions:")
-    session_manager = get_session_manager()
-    sessions = session_manager.list_sessions()
-    if sessions:
-        for num, thread_id in sessions:
-            print(f"  Session {num}: Thread {thread_id}")
-    else:
-        print("  No thread sessions configured")
+    flask_port = settings.get_port('flask')
+    try:
+        url = f"http://localhost:{flask_port}/sessions"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            sessions = data.get('sessions', [])
+            
+            if sessions:
+                for session in sessions:
+                    session_num = session.get('session_num')
+                    thread_id = session.get('thread_id')
+                    print(f"  Session {session_num}: Thread {thread_id}")
+            else:
+                print("  No thread sessions configured")
+        else:
+            print("  ❌ Failed to get sessions from Flask API")
+    except:
+        print("  ❌ Could not connect to Flask API")
     
     # Claude Sessions
     print("\n🤖 Claude Code Sessions:")
@@ -155,16 +168,50 @@ def cmd_doctor():
 
 def cmd_list_sessions():
     """セッション一覧を表示"""
-    session_manager = get_session_manager()
-    sessions = session_manager.list_sessions()
+    settings = SettingsManager()
+    flask_port = settings.get_port('flask')
     
-    print("🧵 Thread Sessions:")
-    print("=" * 40)
-    if sessions:
-        for num, thread_id in sessions:
-            print(f"Session {num}: Thread {thread_id}")
-    else:
-        print("No thread sessions configured.")
+    # Flask APIからセッション情報を取得
+    try:
+        url = f"http://localhost:{flask_port}/sessions"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            sessions = data.get('sessions', [])
+            
+            print("🧵 Thread Sessions:")
+            print("=" * 40)
+            
+            if sessions:
+                for session in sessions:
+                    session_num = session.get('session_num')
+                    thread_id = session.get('thread_id')
+                    idea_name = session.get('idea_name', 'Unknown')
+                    stage = session.get('current_stage', 'Unknown')
+                    
+                    print(f"Session {session_num}: Thread {thread_id}")
+                    if 'idea_name' in session:
+                        print(f"  Project: {idea_name}")
+                        print(f"  Stage: {stage}")
+            else:
+                print("No thread sessions configured.")
+                
+            # 統計情報も表示
+            stats = data.get('stats', {})
+            if stats:
+                print(f"\n📊 Statistics:")
+                print(f"  Total sessions: {stats.get('total_sessions', 0)}")
+                print(f"  Total projects: {stats.get('total_projects', 0)}")
+                print(f"  Active workflows: {stats.get('active_workflows', 0)}")
+                
+        else:
+            print(f"❌ Failed to get sessions from Flask API (status {response.status_code})")
+            
+    except requests.exceptions.ConnectionError:
+        print("❌ Failed to connect to Flask API. Make sure 'vai' is running.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
     
 
 

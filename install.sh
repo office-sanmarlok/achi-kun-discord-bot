@@ -90,6 +90,50 @@ check_tmux() {
     print_success "tmux found"
 }
 
+# Check GitHub CLI
+check_github_cli() {
+    if ! command -v gh &> /dev/null; then
+        print_warning "GitHub CLI (gh) is not installed"
+        echo ""
+        echo "GitHub CLI is required for creating repositories with !complete command"
+        echo "Please install GitHub CLI:"
+        if [[ "$OS" == "macos" ]]; then
+            echo "  brew install gh"
+        else
+            echo "  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg"
+            echo "  echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null"
+            echo "  sudo apt update && sudo apt install gh"
+        fi
+        echo ""
+        read -p "Continue without GitHub CLI? (y/N): " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+        return
+    fi
+    
+    print_success "GitHub CLI found"
+    
+    # Check if authenticated
+    if ! gh auth status &> /dev/null; then
+        print_warning "GitHub CLI is not authenticated"
+        echo ""
+        echo "To authenticate GitHub CLI, run:"
+        echo "  gh auth login"
+        echo ""
+        echo "This is required for creating GitHub repositories with the !complete command"
+        echo ""
+        read -p "Continue without GitHub authentication? (y/N): " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        print_success "GitHub CLI is authenticated"
+    fi
+}
+
 # Install Python dependencies
 install_python_deps() {
     echo ""
@@ -277,6 +321,7 @@ main() {
     check_os
     check_python
     check_tmux
+    check_github_cli
     
     install_python_deps
     setup_config
