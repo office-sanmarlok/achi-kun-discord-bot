@@ -13,8 +13,6 @@ ENV/
 # Runtime
 *.pid
 *.log
-/run/
-/attachments/
 
 # IDE
 .vscode/
