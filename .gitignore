@@ -9,11 +9,12 @@ ENV/
 
 # Configuration
 .env
-sessions.json
 
 # Runtime
 *.pid
 *.log
+/run/
+/attachments/
 
 # IDE
 .vscode/

@@ -21,10 +21,18 @@ import os
 import sys
 import json
 import asyncio
+import subprocess
 import logging
+from dotenv import load_dotenv
+
+# .envファイルを読み込み
+load_dotenv()
 import requests
+import re
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+import aiohttp
 
 # パッケージルートの追加（相対インポート対応）
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -37,7 +45,13 @@ except ImportError:
     sys.exit(1)
 
 from config.settings import SettingsManager
-from attachment_manager import AttachmentManager
+from src.attachment_manager import AttachmentManager
+from src.session_manager import get_session_manager
+from src.project_manager import ProjectManager
+from src.claude_context_manager import ClaudeContextManager
+from src.channel_validator import ChannelValidator
+from src.command_manager import CommandManager
+from src.prompt_sender import get_prompt_sender
 
 # ログ設定（本番環境では外部設定ファイルから読み込み可能）
 logging.basicConfig(
@@ -123,9 +137,17 @@ class ClaudeCLIBot(commands.Bot):
         self.attachment_manager = AttachmentManager()
         self.message_processor = MessageProcessor()
         
+        # 新しいマネージャーの追加
+        self.project_manager = ProjectManager()
+        self.context_manager = ClaudeContextManager()
+        self.channel_validator = ChannelValidator()
+        self.command_manager = CommandManager(self, settings_manager)
+        self.prompt_sender = get_prompt_sender(flask_port=self.settings.get_port('flask'))
+        
         # Discord Bot設定
         intents = discord.Intents.default()
         intents.message_content = True  # メッセージ内容へのアクセス権限
+        intents.guilds = True  # ギルドイベント（on_thread_create等）へのアクセス権限
         
         super().__init__(command_prefix='!', intents=intents)
         
@@ -141,6 +163,21 @@ class ClaudeCLIBot(commands.Bot):
         """
         logger.info(f'{self.user} has connected to Discord!')
         print(f'✅ Discord bot is ready as {self.user}')
+        
+        # チャンネル検証
+        for guild in self.guilds:
+            setup_result = await self.channel_validator.check_bot_setup(guild)
+            if not setup_result["is_valid"]:
+                report = self.channel_validator.format_setup_report(setup_result)
+                print(report)
+                logger.warning(f"Bot setup incomplete in guild {guild.name}")
+            else:
+                print(f"✅ All channels verified in guild: {guild.name}")
+        
+        # プロジェクトディレクトリの作成
+        if not self.project_manager.projects_dir.exists():
+            self.project_manager.projects_dir.mkdir(parents=True, exist_ok=True)
+            print(f"📁 Created projects directory: {self.project_manager.projects_dir}")
         
         # 初回システムクリーンアップ
         await self._perform_initial_cleanup()
@@ -176,16 +213,17 @@ class ClaudeCLIBot(commands.Bot):
         
     async def on_message(self, message):
         """
-        メッセージ受信時のメイン処理ハンドラー
+        メッセージ受信時のメイン処理ハンドラー（スレッドメッセージのみ処理）
         
         処理フロー：
         1. メッセージの事前検証
-        2. セッション確認
-        3. 即座のユーザーフィードバック
-        4. 添付ファイル処理
-        5. メッセージフォーマット
-        6. Claude Codeへの転送
-        7. 結果フィードバック
+        2. スレッドチェック
+        3. セッション確認・作成
+        4. 即座のユーザーフィードバック
+        5. 添付ファイル処理
+        6. メッセージフォーマット
+        7. Claude Codeへの転送
+        8. 結果フィードバック
         
         拡張ポイント：
         - メッセージ前処理フィルター
@@ -194,14 +232,34 @@ class ClaudeCLIBot(commands.Bot):
         - ログ記録
         - 統計収集
         """
-        # 基本的な検証
-        if not await self._validate_message(message):
+        # Bot自身のメッセージは無視
+        if message.author == self.user:
+            return
+        
+        # Discord標準コマンドの処理（!で始まるコマンドを処理）
+        await self.process_commands(message)
+        
+        # Claude Codeに転送すべきかチェック
+        if not self.should_forward_to_claude(message):
+            return
+        
+        # スレッド以外は処理しない
+        if message.channel.type != discord.ChannelType.public_thread:
             return
         
         # セッション確認
-        session_num = self.settings.channel_to_session(str(message.channel.id))
-        if session_num is None:
-            return
+        thread_id = str(message.channel.id)
+        session_manager = get_session_manager()
+        
+        # 既存セッションがあるか確認
+        existing_session = session_manager.get_session(thread_id)
+        session_num = session_manager.get_or_create_session(thread_id)
+        
+        # 新規セッションの場合、Claude Codeセッションを開始
+        if existing_session is None:  # 今作成された場合
+            await message.channel.join()  # スレッドに参加
+            await self._start_claude_session(session_num, message.channel.name)
+            logger.info(f"Created session {session_num} for existing thread {thread_id}")
         
         # ユーザーフィードバック（即座のローディング表示）
         loading_msg = await self._send_loading_feedback(message.channel)
@@ -354,6 +412,89 @@ class ClaudeCLIBot(commands.Bot):
         except Exception as e:
             logger.error(f'メッセージ更新失敗: {e}')
     
+    def should_forward_to_claude(self, message: discord.Message) -> bool:
+        """
+        メッセージをClaude Codeに転送すべきか判定
+        
+        Args:
+            message: Discordメッセージオブジェクト
+        
+        Returns:
+            bool: 転送する場合True、しない場合False
+        """
+        # Bot自身のメッセージは転送しない
+        if message.author == self.user:
+            return False
+        
+        # !で始まるメッセージは転送しない（コマンドとして処理）
+        if message.content.startswith('!'):
+            logger.info(f"Skipping Claude Code forwarding for command message: {message.content[:50]}")
+            return False
+        
+        # それ以外のメッセージは転送する
+        return True
+    
+    async def _start_claude_session(self, session_num: int, thread_name: str, work_dir: str = None):
+        """Claude Codeセッションを起動
+        
+        Args:
+            session_num: セッション番号
+            thread_name: スレッド名
+            work_dir: 作業ディレクトリ（指定しない場合はデフォルト）
+        """
+        session_name = f"claude-session-{session_num}"
+        # 作業ディレクトリの決定（指定がない場合はデフォルト）
+        if work_dir is None:
+            work_dir = self.settings.get_claude_work_dir()
+        claude_options = self.settings.get_claude_options()
+        
+        # claudeコマンドを構築
+        claude_cmd = f"cd {work_dir} && claude {claude_options}".strip()
+        cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
+        
+        try:
+            subprocess.run(cmd, check=True)
+            logger.info(f"Started Claude Code session {session_num} for thread: {thread_name}")
+            print(f"🚀 Started Claude Code session {session_num}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to start Claude Code session: {e}")
+            print(f"❌ Failed to start Claude Code session {session_num}")
+    
+    async def _register_session_to_flask(self, session_num: int, thread_id: str, 
+                                        idea_name: str, current_stage: str,
+                                        working_directory: str, project_path: str = None,
+                                        create_project: bool = False):
+        """Flask APIにセッション情報を登録"""
+        flask_port = self.settings.get_port('flask')
+        url = f"http://localhost:{flask_port}/session/register"
+        
+        payload = {
+            'session_num': session_num,
+            'thread_id': thread_id,
+            'idea_name': idea_name,
+            'current_stage': current_stage,
+            'working_directory': working_directory
+        }
+        
+        if project_path:
+            payload['project_path'] = project_path
+        if create_project:
+            payload['create_project'] = True
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                    if response.status == 200:
+                        logger.info(f"Successfully registered session {session_num} to Flask API")
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Failed to register session to Flask API: {response.status} - {error_text}")
+        except aiohttp.ClientError as e:
+            logger.error(f"Failed to connect to Flask API: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error registering session: {e}")
+    
+    
     @tasks.loop(hours=CLEANUP_INTERVAL_HOURS)
     async def cleanup_task(self):
         """
@@ -376,6 +517,132 @@ class ClaudeCLIBot(commands.Bot):
     async def before_cleanup_task(self):
         """クリーンアップタスク開始前の準備処理"""
         await self.wait_until_ready()
+    
+    async def handle_idea_command(self, ctx, idea_name: str):
+        """
+        !ideaコマンドの処理
+        
+        Args:
+            ctx: コマンドコンテキスト
+            idea_name: アイデア名
+        """
+        # バリデーション
+        if not re.match(r'^[a-z]+(-[a-z]+)*$', idea_name):
+            await ctx.send("❌ アイデア名は小文字アルファベットとハイフンのみ使用できます。例: `my-awesome-app`")
+            return
+        
+        if len(idea_name) > 50:
+            await ctx.send("❌ アイデア名は50文字以内にしてください。")
+            return
+        
+        # 返信元メッセージの確認
+        if not ctx.message.reference:
+            await ctx.send("❌ アイデアを含むメッセージに返信する形で実行してください。")
+            return
+        
+        try:
+            # 返信元メッセージを取得
+            parent_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            
+            # スレッド作成
+            thread = await parent_message.create_thread(name=idea_name)
+            await thread.join()
+            
+            # セッション管理
+            thread_id = str(thread.id)
+            session_manager = get_session_manager()
+            session_num = session_manager.get_or_create_session(thread_id)
+            
+            # プロジェクト構造の作成
+            try:
+                project_path = self.project_manager.create_project_structure(idea_name)
+            except FileExistsError:
+                await thread.send(f"❌ プロジェクト `{idea_name}` は既に存在します。")
+                return
+            
+            # idea.mdファイルの作成
+            idea_content = f"# {idea_name}\n\n## 親メッセージ\n\n{parent_message.content}\n"
+            idea_file_path = self.project_manager.create_document(idea_name, "idea", idea_content)
+            
+            # セッション情報の作成
+            working_dir = str(self.project_manager.achi_kun_root)
+            session_manager.create_session_info(
+                session_num, thread_id, idea_name, "idea", working_dir
+            )
+            
+            # プロジェクト情報の作成
+            session_manager.create_project_info(idea_name, project_path)
+            
+            # Flask APIにセッション情報を登録
+            await self._register_session_to_flask(
+                session_num=session_num,
+                thread_id=thread_id,
+                idea_name=idea_name,
+                current_stage="idea",
+                working_directory=working_dir,
+                project_path=str(project_path),
+                create_project=True
+            )
+            session_manager.create_workflow_state(idea_name, ctx.channel.name)
+            session_manager.add_thread_to_workflow(idea_name, ctx.channel.name, thread_id)
+            
+            # Claude Codeセッションを開始（project-wslディレクトリで）
+            await self._start_claude_session(session_num, thread.name, working_dir)
+            
+            # 少し待ってからプロンプトを送信
+            await asyncio.sleep(3)
+            
+            # 初期コンテキストとプロンプトを送信
+            initial_context = {
+                'channel_name': parent_message.channel.name,
+                'parent_message': {
+                    'author': parent_message.author.name,
+                    'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'content': parent_message.content
+                }
+            }
+            
+            prompt = self.context_manager.generate_idea_prompt(idea_name, parent_message.content)
+            
+            success, msg = await self.prompt_sender.send_initial_context_and_prompt(
+                session_num=session_num,
+                thread_id=str(thread.id),
+                thread_name=thread.name,
+                initial_context=initial_context,
+                prompt=prompt
+            )
+            
+            if not success:
+                logger.error(f"Failed to send initial prompt: {msg}")
+                await thread.send(f"⚠️ プロンプト送信に失敗しました: {msg}")
+            
+            # ドキュメントをプロジェクトに追加
+            session_manager.add_project_document(idea_name, "idea", idea_file_path)
+            
+            # 初期メッセージを投稿
+            initial_message = (
+                f"🎯 プロジェクト `{idea_name}` を作成しました！\n"
+                f"📝 Claude Code セッション #{session_num} を開始しました。\n"
+                f"📄 ファイル: `{idea_file_path}`\n\n"
+                f"アイデアの詳細を記載中です..."
+            )
+            await thread.send(initial_message)
+            
+            # 元のコマンドメッセージを削除
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+            
+            logger.info(f"!idea command executed: {idea_name} (Thread: {thread_id})")
+            
+        except discord.NotFound:
+            await ctx.send("❌ 返信先のメッセージが見つかりません。")
+        except discord.Forbidden:
+            await ctx.send("❌ スレッドを作成する権限がありません。")
+        except Exception as e:
+            logger.error(f"Error in !idea command: {e}", exc_info=True)
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
 
 def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
     """
@@ -415,6 +682,237 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             lines.append(f"Session {num}: <#{channel_id}>")
         
         await ctx.send("\n".join(lines))
+    
+    @bot.command(name='post')
+    async def post_command(ctx, target_channel: discord.TextChannel = None):
+        """現在のスレッド名を指定チャンネルに送信
+        
+        使用方法: !post #チャンネル名
+        スレッド内でのみ使用可能
+        """
+        # スレッド内での実行かチェック
+        if not hasattr(ctx.channel, 'parent') or ctx.channel.parent is None:
+            await ctx.send("❌ このコマンドはスレッド内でのみ使用可能です")
+            return
+        
+        # チャンネルが指定されていない場合
+        if not target_channel:
+            await ctx.send("❌ 送信先チャンネルを指定してください。使用方法: `!post #チャンネル名`")
+            return
+        
+        # スレッド名を取得
+        thread_name = ctx.channel.name
+        
+        # メッセージを送信
+        try:
+            message_content = f"スレッド名: {thread_name}"
+            await target_channel.send(message_content)
+            
+            # 成功メッセージ
+            await ctx.send(f"✅ スレッド名を{target_channel.name}に送信しました")
+            logger.info(f"Posted thread name '{thread_name}' to channel {target_channel.id}")
+            
+        except discord.Forbidden:
+            await ctx.send("❌ 指定されたチャンネルへのアクセス権限がありません")
+            logger.error(f"Permission denied for channel {target_channel.id}")
+        except Exception as e:
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
+            logger.error(f"Error in !post command: {e}", exc_info=True)
+    
+    @bot.command(name='cc')
+    async def cc_command(ctx, thread_name: str = None):
+        """メッセージをスレッド化してClaude Codeセッションを開始
+        
+        使用方法: !cc <thread-name>
+        thread-name: 小文字アルファベットとハイフンのみ使用可能
+        """
+        
+        # スレッド名の必須チェック
+        if not thread_name:
+            await ctx.send("❌ スレッド名を指定してください。使用方法: `!cc <thread-name>`")
+            return
+        
+        # スレッド名のバリデーション（小文字アルファベットとハイフンのみ）
+        if not re.match(r'^[a-z]+(-[a-z]+)*$', thread_name):
+            await ctx.send("❌ スレッド名は小文字アルファベットとハイフンのみ使用できます。例: `hello-world`")
+            return
+        
+        # スレッド名の長さチェック
+        if len(thread_name) > 50:
+            await ctx.send("❌ スレッド名は50文字以内にしてください。")
+            return
+        
+        # 返信先メッセージの確認
+        if not ctx.message.reference:
+            await ctx.send("❌ スレッド化したいメッセージに返信する形で `!cc <thread-name>` を実行してください。")
+            return
+        
+        try:
+            # 返信先メッセージを取得
+            parent_message = await ctx.channel.fetch_message(ctx.message.reference.message_id)
+            
+            # 既にスレッドの場合はエラー
+            if parent_message.channel.type == discord.ChannelType.public_thread:
+                await ctx.send("❌ 既にスレッド内のメッセージです。")
+                return
+            
+            # スレッド名は引数として既に受け取っているため、そのまま使用
+            
+            # スレッドを作成
+            thread = await parent_message.create_thread(
+                name=thread_name
+            )
+            
+            # Botがスレッドに参加
+            await thread.join()
+            
+            # セッション番号を割り当て
+            thread_id = str(thread.id)
+            session_manager = get_session_manager()
+            session_num = session_manager.get_or_create_session(thread_id)
+            
+            # Claude Codeセッションを開始
+            await bot._start_claude_session(session_num, thread.name)
+            
+            # Flask APIにセッション情報を登録
+            await bot._register_session_to_flask(
+                session_num=session_num,
+                thread_id=thread_id,
+                idea_name=thread_name,  # !ccの場合はthread_nameをidea_nameとして使用
+                current_stage="general",  # !ccは汎用的なセッションなので"general"とする
+                working_directory=bot.settings.get_claude_work_dir()
+            )
+            
+            # 少し待ってから初期コンテキストを送信
+            await asyncio.sleep(3)
+            
+            # 初期コンテキストを送信
+            initial_context = {
+                'channel_name': parent_message.channel.name,
+                'parent_message': {
+                    'author': parent_message.author.name,
+                    'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'content': parent_message.content
+                }
+            }
+            
+            # 初期コンテキストのみ送信（プロンプトなし）
+            context_message = bot.prompt_sender.build_initial_context(
+                session_num=session_num,
+                thread_id=str(thread.id),
+                thread_name=thread.name,
+                initial_context=initial_context
+            )
+            
+            success, msg = await bot.prompt_sender.send_prompt(
+                session_num=session_num,
+                prompt=context_message,
+                thread_id=str(thread.id)
+            )
+            
+            if not success:
+                logger.error(f"Failed to send initial context: {msg}")
+            
+            # スレッド内に最初の返信を投稿
+            initial_message = (
+                f"🧵 スレッドを作成しました！\n"
+                f"📝 Claude Code セッション #{session_num} を開始しました。\n\n"
+                f"このスレッドでメッセージを送信すると、Claude Codeに転送されます。"
+            )
+            await thread.send(initial_message)
+            
+            # 元のチャンネルでの確認メッセージは削除（スレッド内で完結させる）
+            try:
+                await ctx.message.delete()
+            except:
+                pass  # 削除権限がない場合は無視
+            
+            logger.info(f"Thread created via !cc command: {thread_name} (ID: {thread.id})")
+            
+        except discord.NotFound:
+            await ctx.send("❌ 返信先のメッセージが見つかりません。")
+        except discord.Forbidden:
+            await ctx.send("❌ スレッドを作成する権限がありません。")
+        except Exception as e:
+            logger.error(f"Error in /thread command: {e}", exc_info=True)
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
+    
+    @bot.command(name='filegen')
+    async def filegen_command(ctx, file_name: str = None):
+        """指定された名前でprojectsディレクトリ内にサブディレクトリを作成
+        
+        使用方法: !filegen <file-name>
+        file-name: 小文字アルファベットとハイフンのみ使用可能
+        """
+        
+        # ファイル名の必須チェック
+        if not file_name:
+            await ctx.send("❌ ファイル名を指定してください。使用方法: `!filegen <file-name>`")
+            return
+        
+        # ファイル名のバリデーション（小文字アルファベットとハイフンのみ）
+        if not re.match(r'^[a-z]+(-[a-z]+)*$', file_name):
+            await ctx.send("❌ ファイル名は小文字アルファベットとハイフンのみ使用できます。例: `my-project`")
+            return
+        
+        # ファイル名の長さチェック
+        if len(file_name) > 50:
+            await ctx.send("❌ ファイル名は50文字以内にしてください。")
+            return
+        
+        try:
+            # プロジェクトのルートディレクトリを取得
+            project_root = Path(__file__).parent.parent
+            projects_dir = project_root / 'projects'
+            
+            # projectsディレクトリが存在しない場合は作成
+            if not projects_dir.exists():
+                projects_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created projects directory: {projects_dir}")
+            
+            # 作成するディレクトリのパス
+            target_dir = projects_dir / file_name
+            
+            # 既に存在する場合はエラー
+            if target_dir.exists():
+                await ctx.send(f"❌ ディレクトリ `{file_name}` は既に存在します。")
+                return
+            
+            # ディレクトリを作成
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 成功メッセージ
+            await ctx.send(f"✅ ディレクトリ `./projects/{file_name}` を作成しました。")
+            logger.info(f"Created directory: {target_dir}")
+            
+        except PermissionError:
+            await ctx.send("❌ ディレクトリを作成する権限がありません。")
+            logger.error(f"Permission denied creating directory: {file_name}")
+        except Exception as e:
+            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
+            logger.error(f"Error in !filegen command: {e}", exc_info=True)
+    
+    @bot.command(name='idea')
+    async def idea_command(ctx, idea_name: str = None):
+        """アイデアからプロジェクトを開始するコマンド
+        
+        使用方法: !idea <idea-name>
+        ※ アイデアを含むメッセージに返信する形で実行
+        """
+        if not idea_name:
+            await ctx.send("❌ アイデア名を指定してください。使用方法: `!idea <idea-name>`")
+            return
+        
+        await bot.handle_idea_command(ctx, idea_name)
+    
+    @bot.command(name='complete')
+    async def complete_command(ctx):
+        """現在のフェーズを完了して次のフェーズへ進むコマンド
+        
+        使用方法: !complete
+        ※ #1-idea, #2-requirements, #3-design, #4-tasksのスレッド内で実行
+        """
+        await bot.command_manager.process_complete_command(ctx)
 
 def run_bot():
     """

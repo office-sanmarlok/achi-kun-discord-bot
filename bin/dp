@@ -2,32 +2,27 @@
 #
 # dp - Discord Postコマンド
 # 使い方:
-#   dp "message"                    # デフォルトセッション
-#   dp 2 "message"                  # セッション2
-#   dp 1234567890123456 "message"   # チャンネルID直接指定
+#   dp <session_number> "message"   # セッション番号を指定してメッセージ送信
 #
 
 # Get toolkit root directory
 TOOLKIT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Check arguments
-if [ $# -eq 0 ]; then
-    echo "Usage: dp [session_number or channel_id] \"message\""
+if [ $# -ne 2 ]; then
+    echo "Usage: dp <session_number> \"message\""
+    echo "Example: dp 1 \"Hello from Claude Code\""
     exit 1
 fi
 
-# Parse arguments
-if [ $# -eq 1 ]; then
-    # Only message provided, use default session
-    MESSAGE="$1"
-    echo -e "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py"
-elif [ $# -eq 2 ]; then
-    # Session/channel and message provided
-    CHANNEL="$1"
-    MESSAGE="$2"
-    echo -e "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py" "$CHANNEL"
-else
-    echo "Error: Too many arguments"
-    echo "Usage: dp [session_number or channel_id] \"message\""
+SESSION="$1"
+MESSAGE="$2"
+
+# Validate session number
+if ! [[ "$SESSION" =~ ^[0-9]+$ ]] || [ "$SESSION" -lt 1 ] || [ "$SESSION" -gt 999 ]; then
+    echo "Error: Session number must be a number between 1 and 999"
     exit 1
 fi
+
+# Send message
+echo -e "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py" "$SESSION"

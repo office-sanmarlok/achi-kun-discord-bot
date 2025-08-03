@@ -37,6 +37,7 @@ except ImportError:
     sys.exit(1)
 
 from config.settings import SettingsManager
+from src.session_manager import get_session_manager
 
 # ログ設定（本番環境では外部設定ファイルから読み込み可能）
 logging.basicConfig(
@@ -189,6 +190,7 @@ class FlaskBridgeApp:
         self.message_forwarder = TmuxMessageForwarder()
         self.message_validator = MessageValidator()
         self.active_processes = {}  # 拡張：アクティブプロセス管理
+        self.session_manager = get_session_manager()  # SessionManagerのインスタンス
         
         # ルーティング設定
         self._configure_routes()
@@ -226,6 +228,9 @@ class FlaskBridgeApp:
         
         # セッション管理エンドポイント
         self.app.route('/sessions', methods=['GET'])(self.get_sessions)
+        self.app.route('/session/<int:session_num>', methods=['GET'])(self.get_session_info)
+        self.app.route('/session/by-thread/<thread_id>', methods=['GET'])(self.get_session_by_thread)
+        self.app.route('/session/register', methods=['POST'])(self.register_session)
         
         # ステータス確認エンドポイント
         self.app.route('/status', methods=['GET'])(self.get_status)
@@ -353,28 +358,181 @@ class FlaskBridgeApp:
     
     def get_sessions(self) -> Response:
         """
-        設定済みセッション一覧の取得
+        セッション一覧の取得（SessionManagerから）
         
         拡張ポイント：
         - セッション詳細情報
         - セッション状態確認
         - フィルタリング機能
         """
-        sessions = self.settings.list_sessions()
+        # SessionManagerから現在のセッション情報を取得
+        sessions = self.session_manager.list_sessions()
+        
+        # 詳細情報を含むレスポンスを構築
+        session_list = []
+        for session_num, thread_id in sessions:
+            session_info_detail = {
+                'session_num': session_num,
+                'thread_id': thread_id,
+                'status': 'active'
+            }
+            
+            # 詳細情報があれば追加
+            if session_num in self.session_manager.session_info:
+                info = self.session_manager.session_info[session_num]
+                session_info_detail.update({
+                    'idea_name': info.idea_name,
+                    'current_stage': info.current_stage,
+                    'created_at': info.created_at.isoformat(),
+                    'tmux_session_name': info.tmux_session_name,
+                    'working_directory': info.working_directory
+                })
+            
+            session_list.append(session_info_detail)
+        
         response_data = {
-            'sessions': [
-                {
-                    'number': num,
-                    'channel_id': ch_id,
-                    'status': 'active'  # 拡張：セッション状態確認
-                }
-                for num, ch_id in sessions
-            ],
-            'default': self.settings.get_default_session(),
-            'total_count': len(sessions)
+            'sessions': session_list,
+            'total_count': len(sessions),
+            'stats': self.session_manager.get_stats()
         }
         
         return jsonify(response_data)
+    
+    def get_session_info(self, session_num: int) -> Response:
+        """
+        特定セッションの詳細情報を取得
+        
+        Args:
+            session_num: セッション番号
+        
+        Returns:
+            セッション詳細情報またはエラー
+        """
+        # スレッドIDを取得
+        thread_id = self.session_manager.find_thread_by_session(session_num)
+        if not thread_id:
+            return jsonify({'error': f'Session {session_num} not found'}), 404
+        
+        # 基本情報
+        session_data = {
+            'session_num': session_num,
+            'thread_id': thread_id
+        }
+        
+        # 詳細情報があれば追加
+        if session_num in self.session_manager.session_info:
+            info = self.session_manager.session_info[session_num]
+            session_data.update({
+                'idea_name': info.idea_name,
+                'current_stage': info.current_stage,
+                'created_at': info.created_at.isoformat(),
+                'tmux_session_name': info.tmux_session_name,
+                'working_directory': info.working_directory
+            })
+            
+            # プロジェクト情報も追加
+            project = self.session_manager.get_project_by_name(info.idea_name)
+            if project:
+                session_data['project'] = {
+                    'project_path': str(project.project_path),
+                    'development_path': str(project.development_path) if project.development_path else None,
+                    'github_url': project.github_url,
+                    'documents': {k: str(v) for k, v in project.documents.items()}
+                }
+        
+        return jsonify(session_data)
+    
+    def get_session_by_thread(self, thread_id: str) -> Response:
+        """
+        スレッドIDからセッション情報を取得
+        
+        Args:
+            thread_id: DiscordスレッドID
+        
+        Returns:
+            セッション情報またはエラー
+        """
+        # セッション番号を取得
+        session_num = self.session_manager.get_session(thread_id)
+        if not session_num:
+            return jsonify({'error': f'No session found for thread {thread_id}'}), 404
+        
+        # セッション詳細情報を返す
+        return self.get_session_info(session_num)
+    
+    def register_session(self) -> Response:
+        """
+        新しいセッションを登録
+        
+        Expected JSON payload:
+        {
+            "session_num": int,
+            "thread_id": str,
+            "idea_name": str,
+            "current_stage": str,
+            "working_directory": str,
+            "project_path": str (optional),
+            "create_project": bool (optional)
+        }
+        
+        Returns:
+            登録結果
+        """
+        try:
+            data = request.json
+            if not data:
+                return jsonify({'error': 'No data provided'}), 400
+            
+            # 必須フィールドの確認
+            required_fields = ['session_num', 'thread_id', 'idea_name', 'current_stage', 'working_directory']
+            for field in required_fields:
+                if field not in data:
+                    return jsonify({'error': f'Missing required field: {field}'}), 400
+            
+            session_num = data['session_num']
+            thread_id = data['thread_id']
+            idea_name = data['idea_name']
+            current_stage = data['current_stage']
+            working_directory = data['working_directory']
+            
+            # セッション番号の割り当て（既存のものを使うか新規作成）
+            existing_session = self.session_manager.get_session(thread_id)
+            if existing_session:
+                # 既存のセッションがある場合は更新
+                session_num = existing_session
+            else:
+                # 新規登録
+                self.session_manager.thread_sessions[thread_id] = session_num
+                if session_num >= self.session_manager.next_session_num:
+                    self.session_manager.next_session_num = session_num + 1
+            
+            # SessionInfoの作成
+            session_info = self.session_manager.create_session_info(
+                session_num=session_num,
+                thread_id=thread_id,
+                idea_name=idea_name,
+                current_stage=current_stage,
+                working_directory=working_directory
+            )
+            
+            # プロジェクト情報の作成（必要な場合）
+            if data.get('create_project', False) and 'project_path' in data:
+                project_path = Path(data['project_path'])
+                self.session_manager.create_project_info(idea_name, project_path)
+                self.session_manager.create_workflow_state(idea_name, f"{current_stage[0]}-{current_stage}")
+            
+            logger.info(f"Session registered: {session_num} -> {thread_id}")
+            
+            return jsonify({
+                'status': 'registered',
+                'session_num': session_num,
+                'thread_id': thread_id,
+                'idea_name': idea_name
+            })
+            
+        except Exception as e:
+            logger.error(f"Error registering session: {e}", exc_info=True)
+            return jsonify({'error': 'Internal server error'}), 500
     
     def get_status(self) -> Response:
         """

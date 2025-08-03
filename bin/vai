@@ -8,6 +8,10 @@ import sys
 import subprocess
 import time
 from pathlib import Path
+import warnings
+
+# RequestsDependencyWarningを抑制
+warnings.filterwarnings('ignore', message='urllib3 .* or chardet .* doesn\'t match a supported')
 
 # Add parent directory to path for imports
 toolkit_root = Path(__file__).parent.parent
@@ -21,6 +25,7 @@ from lib.utils import (
     is_service_running, create_pid_file, stop_service,
     find_available_port, is_port_in_use
 )
+import requests
 
 def cmd_start():
     """サービスを起動"""
@@ -48,19 +53,9 @@ def cmd_start():
     
     tmux.create_panes()
     
-    # Start Claude Code sessions
-    work_dir = settings.get_claude_work_dir()
-    claude_options = settings.get_claude_options()
-    sessions = settings.list_sessions()
-    
-    print("  Starting Claude Code sessions...")
-    for session_num, channel_id in sessions:
-        if tmux.create_claude_session(session_num, work_dir, claude_options):
-            time.sleep(1)  # Give each session time to start
-        else:
-            print(f"  ⚠️  Failed to start Claude session {session_num}")
-    
-    print(f"  Started {len(sessions)} Claude Code sessions")
+    # Don't start Claude Code sessions automatically
+    # Sessions will be created on-demand when threads are created
+    print("  Claude Code sessions will be created when Discord threads are created")
     
     # Get paths
     src_dir = toolkit_root / 'src'
@@ -88,29 +83,15 @@ def cmd_start():
     
     print("\n✅ All services started successfully!")
     
-    # Show Claude sessions
-    claude_sessions = tmux.list_claude_sessions()
-    if claude_sessions:
-        print(f"\n🤖 Claude Code Sessions:")
-        for num, session_name in claude_sessions:
-            default = " ⭐ (default)" if num == settings.get_default_session() else ""
-            print(f"  Session {num}: {session_name}{default}")
-    
     print("\nUsage:")
     print("  vai status    - Check service status")
     print("  vai doctor    - Run environment diagnosis")
     print("  vai view      - View all sessions in one screen")
     print("  vexit         - Stop all services")
-    print("  dp 'message'  - Send message to Discord")
+    print("  dp <session> 'message'  - Send message to Discord thread")
     
     # Offer to attach to tmux
     print(f"\nTo view services: tmux attach -t {tmux.session_name}")
-    if claude_sessions:
-        print("To view Claude sessions:")
-        for num, session_name in claude_sessions[:3]:  # Show first 3
-            print(f"  tmux attach -t {session_name}")
-        if len(claude_sessions) > 3:
-            print(f"  ... and {len(claude_sessions) - 3} more")
 
 def cmd_status():
     """サービスの状態を確認"""
@@ -131,15 +112,28 @@ def cmd_status():
     print(f"  Flask App: {'✅ Running' if is_service_running('flask_app') else '❌ Stopped'}")
     print(f"  tmux Session: {'✅ Active' if tmux.is_session_exists() else '❌ Inactive'}")
     
-    # Discord Sessions
-    print("\n💬 Discord Sessions:")
-    sessions = settings.list_sessions()
-    if sessions:
-        for num, channel_id in sessions:
-            default = " (default)" if num == settings.get_default_session() else ""
-            print(f"  Session {num}: {channel_id}{default}")
-    else:
-        print("  No sessions configured")
+    # Thread Sessions
+    print("\n🧵 Thread Sessions:")
+    flask_port = settings.get_port('flask')
+    try:
+        url = f"http://localhost:{flask_port}/sessions"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            sessions = data.get('sessions', [])
+            
+            if sessions:
+                for session in sessions:
+                    session_num = session.get('session_num')
+                    thread_id = session.get('thread_id')
+                    print(f"  Session {session_num}: Thread {thread_id}")
+            else:
+                print("  No thread sessions configured")
+        else:
+            print("  ❌ Failed to get sessions from Flask API")
+    except:
+        print("  ❌ Could not connect to Flask API")
     
     # Claude Sessions
     print("\n🤖 Claude Code Sessions:")
@@ -175,43 +169,51 @@ def cmd_doctor():
 def cmd_list_sessions():
     """セッション一覧を表示"""
     settings = SettingsManager()
-    sessions = settings.list_sessions()
+    flask_port = settings.get_port('flask')
     
-    if not sessions:
-        print("No sessions configured.")
-        return
+    # Flask APIからセッション情報を取得
+    try:
+        url = f"http://localhost:{flask_port}/sessions"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            data = response.json()
+            sessions = data.get('sessions', [])
+            
+            print("🧵 Thread Sessions:")
+            print("=" * 40)
+            
+            if sessions:
+                for session in sessions:
+                    session_num = session.get('session_num')
+                    thread_id = session.get('thread_id')
+                    idea_name = session.get('idea_name', 'Unknown')
+                    stage = session.get('current_stage', 'Unknown')
+                    
+                    print(f"Session {session_num}: Thread {thread_id}")
+                    if 'idea_name' in session:
+                        print(f"  Project: {idea_name}")
+                        print(f"  Stage: {stage}")
+            else:
+                print("No thread sessions configured.")
+                
+            # 統計情報も表示
+            stats = data.get('stats', {})
+            if stats:
+                print(f"\n📊 Statistics:")
+                print(f"  Total sessions: {stats.get('total_sessions', 0)}")
+                print(f"  Total projects: {stats.get('total_projects', 0)}")
+                print(f"  Active workflows: {stats.get('active_workflows', 0)}")
+                
+        else:
+            print(f"❌ Failed to get sessions from Flask API (status {response.status_code})")
+            
+    except requests.exceptions.ConnectionError:
+        print("❌ Failed to connect to Flask API. Make sure 'vai' is running.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
     
-    print("📋 Configured Sessions:")
-    print("=" * 40)
-    default_session = settings.get_default_session()
-    
-    for num, channel_id in sessions:
-        default = " ⭐ (default)" if num == default_session else ""
-        print(f"Session {num}: {channel_id}{default}")
 
-def cmd_add_session(channel_id: str):
-    """新しいセッションを追加"""
-    settings = SettingsManager()
-    
-    # Validate channel ID
-    if not channel_id.isdigit() or len(channel_id) < 15:
-        print("❌ Invalid channel ID format")
-        print("Channel IDs should be 15-20 digit numbers")
-        return
-    
-    # Check if already exists
-    existing_session = settings.channel_to_session(channel_id)
-    if existing_session:
-        print(f"⚠️  Channel {channel_id} is already configured as session {existing_session}")
-        return
-    
-    # Add session
-    session_num = settings.add_session(channel_id)
-    print(f"✅ Added channel {channel_id} as session {session_num}")
-    
-    # Update sessions list in memory if bot is running
-    if is_service_running('discord_bot'):
-        print("ℹ️  Restart the bot to use the new session")
 
 def cmd_view():
     """全セッションを1画面でリアルタイム表示"""
@@ -390,11 +392,10 @@ def print_usage():
     print("  vai status             Check service status")
     print("  vai doctor             Run environment diagnosis")
     print("  vai view               View all sessions in one screen")
-    print("  vai list-sessions      List configured sessions")
-    print("  vai add-session <id>   Add new Discord channel session")
+    print("  vai list-sessions      List thread sessions")
     print("\nOther commands:")
     print("  vexit                  Stop all services")
-    print("  dp [session] 'msg'     Send message to Discord")
+    print("  dp <session> 'msg'     Send message to Discord thread (session number required)")
 
 def main():
     """メイン関数"""
@@ -413,15 +414,6 @@ def main():
             cmd_list_sessions()
         elif command in ['help', '--help', '-h']:
             print_usage()
-        else:
-            print(f"Unknown command: {command}")
-            print_usage()
-            sys.exit(1)
-    elif len(sys.argv) == 3:
-        command = sys.argv[1]
-        arg = sys.argv[2]
-        if command == 'add-session':
-            cmd_add_session(arg)
         else:
             print(f"Unknown command: {command}")
             print_usage()

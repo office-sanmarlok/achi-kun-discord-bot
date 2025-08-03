@@ -15,6 +15,56 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import SettingsManager
 
+def get_session_info_from_api(session_num: int, flask_port: int = 5001):
+    """
+    Flask APIからセッション情報を取得
+    
+    Args:
+        session_num: セッション番号
+        flask_port: Flask APIのポート番号
+    
+    Returns:
+        セッション情報の辞書、エラー時はNone
+    """
+    try:
+        url = f"http://localhost:{flask_port}/session/{session_num}"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+            return None
+        else:
+            print(f"Error: Flask API returned status {response.status_code}")
+            return None
+    except requests.exceptions.ConnectionError:
+        print("Error: Failed to connect to Flask API. Make sure 'vai' is running.")
+        return None
+    except Exception as e:
+        print(f"Error connecting to Flask API: {e}")
+        return None
+
+def get_sessions_list_from_api(flask_port: int = 5001):
+    """
+    Flask APIからセッション一覧を取得
+    
+    Args:
+        flask_port: Flask APIのポート番号
+    
+    Returns:
+        セッション一覧、エラー時はNone
+    """
+    try:
+        url = f"http://localhost:{flask_port}/sessions"
+        response = requests.get(url, timeout=5)
+        
+        if response.status_code == 200:
+            return response.json().get('sessions', [])
+        else:
+            return None
+    except:
+        return None
+
 def post_to_discord(channel_id: str, message: str):
     """Post a message to Discord channel"""
     settings = SettingsManager()
@@ -72,23 +122,31 @@ def main():
     if not sys.stdin.isatty():
         message = sys.stdin.read().strip()
         
-        # Check if channel ID is provided as argument
-        if len(sys.argv) > 1:
-            channel_arg = sys.argv[1]
-        else:
-            # Use default session
-            channel_arg = str(settings.get_default_session())
+        # Session number is required
+        if len(sys.argv) != 2:
+            print("Error: Session number required")
+            sys.exit(1)
+            
+        session_num = int(sys.argv[1])
+        flask_port = settings.get_port('flask')
         
-        # Determine if it's a session number or channel ID
-        if channel_arg.isdigit() and len(channel_arg) < 5:
-            # It's a session number
-            channel_id = settings.get_session_channel(int(channel_arg))
-            if not channel_id:
-                print(f"Error: Session {channel_arg} not configured")
-                sys.exit(1)
-        else:
-            # It's a channel ID
-            channel_id = channel_arg
+        # Look up session info from Flask API
+        session_info = get_session_info_from_api(session_num, flask_port)
+        
+        if not session_info:
+            print(f"Error: Session {session_num} not found")
+            
+            # Try to get available sessions
+            sessions = get_sessions_list_from_api(flask_port)
+            if sessions:
+                print("Available sessions:")
+                for session in sessions:
+                    print(f"  Session {session['session_num']}")
+            else:
+                print("Could not retrieve session list from Flask API")
+            sys.exit(1)
+        
+        channel_id = session_info['thread_id']
         
         # Post message
         if post_to_discord(channel_id, message):
@@ -97,7 +155,7 @@ def main():
         else:
             sys.exit(1)
     else:
-        print("Usage: echo 'message' | discord_post.py [session_number or channel_id]")
+        print("Usage: echo 'message' | discord_post.py <session_number>")
         sys.exit(1)
 
 if __name__ == "__main__":

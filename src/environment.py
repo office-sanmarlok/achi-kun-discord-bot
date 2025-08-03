@@ -54,7 +54,8 @@ class EnvironmentDetector:
         deps = {
             'tmux': shutil.which('tmux') is not None,
             'curl': shutil.which('curl') is not None,
-            'git': shutil.which('git') is not None
+            'git': shutil.which('git') is not None,
+            'gh': shutil.which('gh') is not None
         }
         
         # Python packages
@@ -76,7 +77,22 @@ class EnvironmentDetector:
         except ImportError:
             deps['flask'] = False
             
+        # GitHub CLI authentication check
+        if deps['gh']:
+            deps['gh_authenticated'] = self._check_gh_auth()
+        else:
+            deps['gh_authenticated'] = False
+            
         return deps
+    
+    def _check_gh_auth(self) -> bool:
+        """GitHub CLIが認証されているかチェック"""
+        try:
+            result = subprocess.run(['gh', 'auth', 'status'], 
+                                  capture_output=True, text=True)
+            return result.returncode == 0
+        except:
+            return False
     
     def detect_shell(self) -> str:
         """使用中のシェルを検出"""
@@ -152,7 +168,12 @@ class EnvironmentDetector:
             if not installed:
                 if dep in ['tmux', 'curl', 'git']:
                     issues.append(f"❌ Missing system dependency: {dep}")
-                else:
+                elif dep == 'gh':
+                    issues.append(f"⚠️  GitHub CLI (gh) not installed - required for !complete command")
+                elif dep == 'gh_authenticated':
+                    if env_info['dependencies'].get('gh', False):
+                        issues.append(f"⚠️  GitHub CLI not authenticated - run 'gh auth login'")
+                elif dep not in ['gh_authenticated']:
                     issues.append(f"❌ Missing Python package: {dep}")
         
         # Config check

@@ -90,6 +90,50 @@ check_tmux() {
     print_success "tmux found"
 }
 
+# Check GitHub CLI
+check_github_cli() {
+    if ! command -v gh &> /dev/null; then
+        print_warning "GitHub CLI (gh) is not installed"
+        echo ""
+        echo "GitHub CLI is required for creating repositories with !complete command"
+        echo "Please install GitHub CLI:"
+        if [[ "$OS" == "macos" ]]; then
+            echo "  brew install gh"
+        else
+            echo "  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg"
+            echo "  echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null"
+            echo "  sudo apt update && sudo apt install gh"
+        fi
+        echo ""
+        read -p "Continue without GitHub CLI? (y/N): " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+        return
+    fi
+    
+    print_success "GitHub CLI found"
+    
+    # Check if authenticated
+    if ! gh auth status &> /dev/null; then
+        print_warning "GitHub CLI is not authenticated"
+        echo ""
+        echo "To authenticate GitHub CLI, run:"
+        echo "  gh auth login"
+        echo ""
+        echo "This is required for creating GitHub repositories with the !complete command"
+        echo ""
+        read -p "Continue without GitHub authentication? (y/N): " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        print_success "GitHub CLI is authenticated"
+    fi
+}
+
 # Install Python dependencies
 install_python_deps() {
     echo ""
@@ -119,17 +163,12 @@ setup_config() {
     echo ""
     print_info "Setting up configuration..."
     
-    # Migration from old config directory name
-    OLD_CONFIG_DIR="$HOME/.claude-cli-toolkit"
-    CONFIG_DIR="$HOME/.claude-discord-bridge"
+    # Use project directory for configuration
+    CONFIG_DIR="$TOOLKIT_ROOT"
     
-    # Migrate if old exists and new doesn't
-    if [ -d "$OLD_CONFIG_DIR" ] && [ ! -d "$CONFIG_DIR" ]; then
-        mv "$OLD_CONFIG_DIR" "$CONFIG_DIR"
-        print_success "Migrated config directory: $OLD_CONFIG_DIR → $CONFIG_DIR"
-    fi
-    
-    mkdir -p "$CONFIG_DIR"
+    # Create necessary directories
+    mkdir -p "$CONFIG_DIR/run"
+    mkdir -p "$CONFIG_DIR/attachments"
     
     # Check if already configured
     if [[ -f "$CONFIG_DIR/.env" ]]; then
@@ -151,31 +190,6 @@ setup_config() {
     
     if [[ -z "$DISCORD_TOKEN" ]]; then
         print_error "Discord token cannot be empty"
-        exit 1
-    fi
-    
-    # Get Discord channel IDs for sessions
-    echo ""
-    echo "Now let's set up your Discord sessions."
-    echo "You can add up to 3 sessions (channels) initially."
-    echo ""
-    
-    SESSIONS=()
-    for i in 1 2 3; do
-        echo "Session $i - Enter channel ID (or press Enter to skip):"
-        read CHANNEL_ID
-        
-        if [[ -n "$CHANNEL_ID" ]]; then
-            if [[ ! "$CHANNEL_ID" =~ ^[0-9]{15,20}$ ]]; then
-                print_warning "Invalid channel ID format, skipping"
-            else
-                SESSIONS+=("$i:$CHANNEL_ID")
-            fi
-        fi
-    done
-    
-    if [[ ${#SESSIONS[@]} -eq 0 ]]; then
-        print_error "At least one session must be configured"
         exit 1
     fi
     
@@ -202,24 +216,12 @@ setup_config() {
 # This file contains sensitive information. Do not share!
 
 DISCORD_BOT_TOKEN=$DISCORD_TOKEN
-DEFAULT_SESSION=1
 FLASK_PORT=5001
 CLAUDE_WORK_DIR=$CLAUDE_WORK_DIR
 CLAUDE_OPTIONS=$CLAUDE_OPTIONS
 EOF
     
     chmod 600 "$CONFIG_DIR/.env"
-    
-    # Create sessions.json
-    echo "{" > "$CONFIG_DIR/sessions.json"
-    for i in "${!SESSIONS[@]}"; do
-        IFS=':' read -r num channel <<< "${SESSIONS[$i]}"
-        echo "  \"$num\": \"$channel\"" >> "$CONFIG_DIR/sessions.json"
-        if [[ $i -lt $((${#SESSIONS[@]} - 1)) ]]; then
-            echo "," >> "$CONFIG_DIR/sessions.json"
-        fi
-    done
-    echo "}" >> "$CONFIG_DIR/sessions.json"
     
     print_success "Configuration saved"
 }
@@ -281,7 +283,6 @@ ENV/
 
 # Configuration
 .env
-sessions.json
 
 # Runtime
 *.pid
@@ -320,6 +321,7 @@ main() {
     check_os
     check_python
     check_tmux
+    check_github_cli
     
     install_python_deps
     setup_config
