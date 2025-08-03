@@ -10,27 +10,129 @@ Claude Context Manager - Claude Codeへのコンテキストとプロンプト�
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from datetime import datetime
+from string import Template
 
 logger = logging.getLogger(__name__)
+
+
+class PromptTemplateLoader:
+    """プロンプトテンプレートをファイルから読み込むクラス"""
+    
+    def __init__(self, prompts_dir: Optional[Path] = None):
+        """
+        初期化
+        
+        Args:
+            prompts_dir: プロンプトディレクトリのパス（デフォルト: ./prompts）
+        """
+        if prompts_dir is None:
+            self.prompts_dir = Path(__file__).parent.parent / "prompts"
+        else:
+            self.prompts_dir = prompts_dir
+            
+        logger.info(f"PromptTemplateLoader initialized with prompts directory: {self.prompts_dir}")
+    
+    def load_template(self, template_name: str) -> Optional[str]:
+        """
+        テンプレートファイルを読み込む
+        
+        Args:
+            template_name: テンプレート名（例: "cc.md", "complete/requirements.md"）
+            
+        Returns:
+            テンプレート内容、ファイルが存在しない場合はNone
+        """
+        template_path = self.prompts_dir / template_name
+        
+        if not template_path.exists():
+            logger.warning(f"Template file not found: {template_path}")
+            return None
+            
+        try:
+            with open(template_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                logger.info(f"Loaded template: {template_path}")
+                return content
+        except Exception as e:
+            logger.error(f"Error loading template {template_path}: {e}")
+            return None
+    
+    def load_and_combine_templates(self, command_template: str, 
+                                   base_template: str = "context_base.md") -> Optional[str]:
+        """
+        ベーステンプレートとコマンドテンプレートを結合して読み込む
+        
+        Args:
+            command_template: コマンド特有のテンプレート名
+            base_template: ベーステンプレート名（デフォルト: context_base.md）
+            
+        Returns:
+            結合されたテンプレート内容、失敗時はNone
+        """
+        # ベーステンプレートを読み込み
+        base_content = self.load_template(base_template)
+        if not base_content:
+            logger.warning(f"Base template not found: {base_template}. Using command template only.")
+            base_content = ""
+        
+        # コマンドテンプレートを読み込み
+        command_content = self.load_template(command_template)
+        if not command_content:
+            logger.warning(f"Command template not found: {command_template}")
+            # コマンドテンプレートがない場合は、ベーステンプレートのみ返す
+            return base_content if base_content else None
+        
+        # 両方を結合（ベース + 改行 + コマンド）
+        if base_content:
+            combined = base_content + "\n\n" + command_content
+            logger.info(f"Combined templates: {base_template} + {command_template}")
+        else:
+            combined = command_content
+            
+        return combined
+    
+    def render_template(self, template_content: str, variables: Dict[str, Any]) -> str:
+        """
+        テンプレート内の変数を置換
+        
+        Args:
+            template_content: テンプレート内容
+            variables: 置換する変数の辞書
+            
+        Returns:
+            変数置換後のテンプレート内容
+        """
+        try:
+            template = Template(template_content)
+            # Noneの値を空文字列に変換
+            safe_variables = {k: (v if v is not None else '') for k, v in variables.items()}
+            return template.safe_substitute(safe_variables)
+        except Exception as e:
+            logger.error(f"Error rendering template: {e}")
+            return template_content
 
 
 class ClaudeContextManager:
     """Claude Codeへのコンテキストとプロンプトを管理するクラス"""
     
-    def __init__(self, sdd_path: Optional[Path] = None):
+    def __init__(self, sdd_path: Optional[Path] = None, prompts_dir: Optional[Path] = None):
         """
         初期化
         
         Args:
             sdd_path: SDD.mdファイルのパス（デフォルト: ./docs/SDD.md）
+            prompts_dir: プロンプトディレクトリのパス（デフォルト: ./prompts）
         """
         if sdd_path is None:
             # デフォルトパスを設定
             self.sdd_path = Path(__file__).parent.parent / "docs" / "SDD.md"
         else:
             self.sdd_path = sdd_path
+            
+        # テンプレートローダーを初期化
+        self.template_loader = PromptTemplateLoader(prompts_dir)
         
         logger.info(f"ClaudeContextManager initialized with SDD path: {self.sdd_path}")
     
@@ -74,7 +176,9 @@ class ClaudeContextManager:
         
         return "\n".join(context_lines)
     
-    def generate_idea_prompt(self, idea_name: str, parent_content: str) -> str:
+    def generate_idea_prompt(self, idea_name: str, parent_content: str, 
+                            thread_info: Dict[str, str] = None,
+                            session_num: int = None) -> str:
         """
         idea.md生成用プロンプトを生成
         
@@ -85,7 +189,25 @@ class ClaudeContextManager:
         Returns:
             idea.md生成用プロンプト
         """
-        prompt = f"""親メッセージの内容をもとに、./projects/{idea_name}/idea.mdに企画提案書を記載してください。
+        # context_base.mdとidea.mdを結合して読み込み
+        template_content = self.template_loader.load_and_combine_templates("idea.md")
+        
+        if template_content:
+            # テンプレートが存在する場合は変数を置換
+            variables = {
+                'idea_name': idea_name,
+                'parent_content': parent_content,
+                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
+                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
+                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
+                'session_num': session_num if session_num else '',
+                'author': thread_info.get('author', '') if thread_info else '',
+                'created_at': thread_info.get('created_at', '') if thread_info else ''
+            }
+            return self.template_loader.render_template(template_content, variables)
+        else:
+            # テンプレートが存在しない場合はデフォルトを使用
+            prompt = f"""親メッセージの内容をもとに、./projects/{idea_name}/idea.mdに企画提案書を記載してください。
 
 親メッセージ:
 {parent_content}
@@ -96,10 +218,12 @@ class ClaudeContextManager:
 - 提案する解決策
 - 期待される効果
 - 実装の概要（技術的な観点）"""
-        
-        return prompt
+            
+            return prompt
     
-    def generate_requirements_prompt(self, idea_name: str) -> str:
+    def generate_requirements_prompt(self, idea_name: str,
+                                    thread_info: Dict[str, str] = None,
+                                    session_num: int = None) -> str:
         """
         requirements.md生成用プロンプトを生成（SDD.md参照）
         
@@ -109,7 +233,26 @@ class ClaudeContextManager:
         Returns:
             requirements.md生成用プロンプト
         """
-        prompt = f"""./projects/{idea_name}/idea.mdを読んで、{self.sdd_path}のRequirement Gatheringセクションに従って./projects/{idea_name}/requirements.mdに要件定義を記載してください。
+        # context_base.mdとcomplete/requirements.mdを結合して読み込み
+        template_content = self.template_loader.load_and_combine_templates("complete/requirements.md")
+        
+        if template_content:
+            # テンプレートが存在する場合は変数を置換
+            variables = {
+                'idea_name': idea_name,
+                'sdd_path': str(self.sdd_path),
+                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
+                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
+                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
+                'session_num': session_num if session_num else '',
+                'author': thread_info.get('author', '') if thread_info else '',
+                'created_at': thread_info.get('created_at', '') if thread_info else '',
+                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
+            }
+            return self.template_loader.render_template(template_content, variables)
+        else:
+            # テンプレートが存在しない場合はデフォルトを使用
+            prompt = f"""./projects/{idea_name}/idea.mdを読んで、{self.sdd_path}のRequirement Gatheringセクションに従って./projects/{idea_name}/requirements.mdに要件定義を記載してください.
 
 具体的には以下の形式で記載してください：
 
@@ -128,7 +271,9 @@ class ClaudeContextManager:
         
         return prompt
     
-    def generate_design_prompt(self, idea_name: str) -> str:
+    def generate_design_prompt(self, idea_name: str,
+                              thread_info: Dict[str, str] = None,
+                              session_num: int = None) -> str:
         """
         design.md生成用プロンプトを生成（SDD.md参照）
         
@@ -138,7 +283,26 @@ class ClaudeContextManager:
         Returns:
             design.md生成用プロンプト
         """
-        prompt = f"""./projects/{idea_name}/requirements.mdを読んで、{self.sdd_path}のCreate Feature Design Documentセクションに従って./projects/{idea_name}/design.mdに設計書を記載してください。
+        # context_base.mdとcomplete/design.mdを結合して読み込み
+        template_content = self.template_loader.load_and_combine_templates("complete/design.md")
+        
+        if template_content:
+            # テンプレートが存在する場合は変数を置換
+            variables = {
+                'idea_name': idea_name,
+                'sdd_path': str(self.sdd_path),
+                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
+                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
+                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
+                'session_num': session_num if session_num else '',
+                'author': thread_info.get('author', '') if thread_info else '',
+                'created_at': thread_info.get('created_at', '') if thread_info else '',
+                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
+            }
+            return self.template_loader.render_template(template_content, variables)
+        else:
+            # テンプレートが存在しない場合はデフォルトを使用
+            prompt = f"""./projects/{idea_name}/requirements.mdを読んで、{self.sdd_path}のCreate Feature Design Documentセクションに従って./projects/{idea_name}/design.mdに設計書を記載してください。
 
 設計書には以下のセクションを含めてください：
 
@@ -172,7 +336,9 @@ class ClaudeContextManager:
         
         return prompt
     
-    def generate_tasks_prompt(self, idea_name: str) -> str:
+    def generate_tasks_prompt(self, idea_name: str,
+                            thread_info: Dict[str, str] = None,
+                            session_num: int = None) -> str:
         """
         tasks.md生成用プロンプトを生成（SDD.md参照）
         
@@ -182,7 +348,26 @@ class ClaudeContextManager:
         Returns:
             tasks.md生成用プロンプト
         """
-        prompt = f"""./projects/{idea_name}/design.mdを読んで、{self.sdd_path}のCreate Task Listセクションに従って./projects/{idea_name}/tasks.mdに実装タスクリストを記載してください。
+        # context_base.mdとcomplete/tasks.mdを結合して読み込み
+        template_content = self.template_loader.load_and_combine_templates("complete/tasks.md")
+        
+        if template_content:
+            # テンプレートが存在する場合は変数を置換
+            variables = {
+                'idea_name': idea_name,
+                'sdd_path': str(self.sdd_path),
+                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
+                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
+                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
+                'session_num': session_num if session_num else '',
+                'author': thread_info.get('author', '') if thread_info else '',
+                'created_at': thread_info.get('created_at', '') if thread_info else '',
+                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
+            }
+            return self.template_loader.render_template(template_content, variables)
+        else:
+            # テンプレートが存在しない場合はデフォルトを使用
+            prompt = f"""./projects/{idea_name}/design.mdを読んで、{self.sdd_path}のCreate Task Listセクションに従って./projects/{idea_name}/tasks.mdに実装タスクリストを記載してください。
 
 以下の指示に従ってタスクリストを作成してください：
 
@@ -213,7 +398,9 @@ class ClaudeContextManager:
         
         return prompt
     
-    def generate_development_prompt(self, idea_name: str) -> str:
+    def generate_development_prompt(self, idea_name: str,
+                                   thread_info: Dict[str, str] = None,
+                                   session_num: int = None) -> str:
         """
         開発開始用プロンプトを生成
         
@@ -223,7 +410,25 @@ class ClaudeContextManager:
         Returns:
             開発開始用プロンプト
         """
-        prompt = f"""./projects/{idea_name}/tasks.mdのタスクリストに従って、v0の開発を開始してください。
+        # context_base.mdとcomplete/development.mdを結合して読み込み
+        template_content = self.template_loader.load_and_combine_templates("complete/development.md")
+        
+        if template_content:
+            # テンプレートが存在する場合は変数を置換
+            variables = {
+                'idea_name': idea_name,
+                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
+                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
+                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
+                'session_num': session_num if session_num else '',
+                'author': thread_info.get('author', '') if thread_info else '',
+                'created_at': thread_info.get('created_at', '') if thread_info else '',
+                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
+            }
+            return self.template_loader.render_template(template_content, variables)
+        else:
+            # テンプレートが存在しない場合はデフォルトを使用
+            prompt = f"""./projects/{idea_name}/tasks.mdのタスクリストに従って、v0の開発を開始してください。
 
 タスクリストの順番に従って実装を進め、各タスクが完了したら該当するチェックボックスを埋めてください。
 
@@ -234,8 +439,8 @@ class ClaudeContextManager:
 4. コードの可読性を重視する
 
 最初のタスクから開始してください。"""
-        
-        return prompt
+            
+            return prompt
     
     def format_complete_message(self, stage: str, idea_name: str) -> str:
         """

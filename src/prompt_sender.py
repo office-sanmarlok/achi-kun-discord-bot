@@ -13,6 +13,7 @@ import logging
 import requests
 from typing import Optional, Dict, Any, Tuple
 from pathlib import Path
+from string import Template
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class PromptSender:
         self.flask_port = flask_port
         self.timeout = timeout
         self.base_url = f"http://localhost:{flask_port}"
+        self.prompts_dir = Path(__file__).parent.parent / "prompts"
     
     async def send_prompt(self, 
                          session_num: int,
@@ -145,7 +147,9 @@ class PromptSender:
                             session_num: int,
                             thread_id: str,
                             thread_name: str,
-                            initial_context: Dict[str, Any]) -> str:
+                            initial_context: Dict[str, Any],
+                            template_name: str = "cc.md",
+                            use_base_template: bool = True) -> str:
         """
         初期コンテキストメッセージを構築（送信はしない）
         
@@ -154,10 +158,66 @@ class PromptSender:
             thread_id: DiscordスレッドID
             thread_name: スレッド名
             initial_context: 初期コンテキスト情報
+            template_name: 使用するテンプレートファイル名
             
         Returns:
             構築されたコンテキストメッセージ
         """
+        # テンプレートファイルを読み込みを試みる
+        template_content = None
+        
+        if use_base_template:
+            # context_base.mdを読み込む
+            base_path = self.prompts_dir / "context_base.md"
+            if base_path.exists():
+                try:
+                    with open(base_path, 'r', encoding='utf-8') as f:
+                        base_content = f.read()
+                        template_content = base_content
+                except Exception as e:
+                    logger.warning(f"Failed to load base template: {e}")
+            
+            # コマンドテンプレートを読み込む
+            template_path = self.prompts_dir / template_name
+            if template_path.exists():
+                try:
+                    with open(template_path, 'r', encoding='utf-8') as f:
+                        command_content = f.read()
+                        if template_content:
+                            template_content = template_content + "\n\n" + command_content
+                        else:
+                            template_content = command_content
+                except Exception as e:
+                    logger.warning(f"Failed to load command template: {e}")
+        else:
+            # コマンドテンプレートのみ読み込む
+            template_path = self.prompts_dir / template_name
+            if template_path.exists():
+                try:
+                    with open(template_path, 'r', encoding='utf-8') as f:
+                        template_content = f.read()
+                except Exception as e:
+                    logger.warning(f"Failed to load template: {e}")
+        
+        if template_content:
+                    
+                # 変数を準備
+                parent = initial_context.get('parent_message', {})
+                variables = {
+                    'channel_name': initial_context.get('channel_name', 'Unknown'),
+                    'thread_name': thread_name,
+                    'thread_id': thread_id,
+                    'session_num': session_num,
+                    'author': parent.get('author', 'Unknown'),
+                    'created_at': parent.get('created_at', 'Unknown'),
+                    'parent_content': parent.get('content', '')
+                }
+                
+                # テンプレート変数を置換
+                template = Template(template_content)
+                return template.safe_substitute(variables)
+        
+        # テンプレートが存在しない場合はデフォルトを使用
         context_lines = [
             "=== Discord スレッド情報 ===",
             f"チャンネル名: {initial_context.get('channel_name', 'Unknown')}",
