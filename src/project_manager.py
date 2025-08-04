@@ -36,12 +36,17 @@ class ProjectManager:
         
         # 環境変数から設定
         self.project_wsl_root = Path(project_root)
-        self.bot_dir = self.project_wsl_root / "akd-sdd"
+        
+        # ディレクトリの設定
         self.achi_kun_root = self.project_wsl_root  # 開発用ディレクトリ（project-wslそのもの）
         self.projects_dir = self.project_wsl_root / "projects"  # ドキュメント用ディレクトリ
         self.projects_root = self.projects_dir  # エイリアスを追加
         
+        # GitHub workflowテンプレートのパス
+        self.workflow_templates_dir = self.project_wsl_root / "github-workflow-templates" / ".github"
+        
         logger.info(f"ProjectManager initialized - projects: {self.projects_dir}, achi-kun: {self.achi_kun_root}")
+    
     
     def create_project_structure(self, idea_name: str) -> Path:
         """
@@ -140,22 +145,24 @@ class ProjectManager:
     
     def copy_github_workflows(self, idea_name: str) -> None:
         """
-        GitHub Actionsワークフローをコピー
+        GitHub Actionsワークフローテンプレートをコピー
         
         Args:
             idea_name: プロジェクト名
             
         Raises:
-            FileNotFoundError: ソースまたはターゲットが見つからない場合
+            FileNotFoundError: テンプレートまたはターゲットが見つからない場合
         """
         # ソースとターゲットのパス
-        source_workflows = self.bot_dir / ".github"
+        source_workflows = self.workflow_templates_dir
         target_dir = self.achi_kun_root / idea_name
         target_workflows = target_dir / ".github"
         
-        # ソースの存在確認
+        # テンプレートの存在確認
         if not source_workflows.exists():
-            raise FileNotFoundError(f"ワークフローディレクトリが見つかりません: {source_workflows}")
+            logger.warning(f"ワークフローテンプレートが見つかりません: {source_workflows}")
+            logger.info("テンプレートなしで続行します")
+            return
         
         # ターゲットディレクトリの存在確認
         if not target_dir.exists():
@@ -167,7 +174,7 @@ class ProjectManager:
         
         # コピー実行
         shutil.copytree(source_workflows, target_workflows)
-        logger.info(f"Copied GitHub workflows: {source_workflows} -> {target_workflows}")
+        logger.info(f"Copied GitHub workflow templates: {source_workflows} -> {target_workflows}")
     
     async def init_git_repository(self, path: Path) -> Tuple[bool, str]:
         """

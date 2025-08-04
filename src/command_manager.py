@@ -243,7 +243,7 @@ class CommandManager:
         
         # Git操作コマンドの定義
         git_commands = [
-            ["git", "add", f"{thread_name}/*"],
+            ["git", "add", "."],  # projects全体をステージング
             ["git", "commit", "-m", f"[{thread_name}] Complete {phase_name} phase"]
         ]
         
