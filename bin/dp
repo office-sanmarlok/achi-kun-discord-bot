@@ -25,4 +25,5 @@ if ! [[ "$SESSION" =~ ^[0-9]+$ ]] || [ "$SESSION" -lt 1 ] || [ "$SESSION" -gt 99
 fi
 
 # Send message
-echo -e "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py" "$SESSION"
+# Use printf to avoid bash interpreting special characters
+printf '%s\n' "$MESSAGE" | python3 "$TOOLKIT_ROOT/src/discord_post.py" "$SESSION"
