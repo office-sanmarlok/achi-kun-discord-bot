@@ -17,6 +17,7 @@ from typing import List, Tuple, Optional
 import discord
 
 from src.prompt_sender import get_prompt_sender
+from lib.command_executor import async_run
 
 logger = logging.getLogger(__name__)
 
@@ -358,7 +359,7 @@ class CommandManager:
             
             # GitHubリポジトリ作成
             create_repo_cmd = ["gh", "repo", "create", thread_name, "--public", "--source=.", "--remote=origin"]
-            success, output = await self._run_command(create_repo_cmd, cwd=str(dev_path))
+            success, output = await async_run(create_repo_cmd, cwd=str(dev_path))
             
             # GitHub ユーザー名取得
             github_user = await self._get_github_user()
@@ -614,38 +615,9 @@ class CommandManager:
             f"tasks.mdに従って開発を進めてください。"
         )
     
-    async def _run_command(self, command: List[str], cwd: Optional[str] = None) -> Tuple[bool, str]:
-        """
-        非同期でコマンドを実行
-        
-        Args:
-            command: 実行するコマンドのリスト
-            cwd: 作業ディレクトリ
-            
-        Returns:
-            (成功フラグ, 出力メッセージ)
-        """
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                return True, stdout.decode('utf-8').strip()
-            else:
-                return False, stderr.decode('utf-8').strip()
-                
-        except Exception as e:
-            return False, str(e)
-    
     async def _get_github_user(self) -> str:
         """GitHub ユーザー名を取得"""
-        success, output = await self._run_command(["gh", "api", "user", "--jq", ".login"])
+        success, output = await async_run(["gh", "api", "user", "--jq", ".login"])
         if success:
             return output.strip()
         return "unknown"
@@ -670,7 +642,7 @@ class CommandManager:
             create_cmd = ["gh", "repo", "create", "claude-projects", 
                          "--private", "--source", ".", "--remote", "origin",
                          "--description", "Claude Code project documentation repository"]
-            success, output = await self._run_command(create_cmd, cwd=str(projects_root))
+            success, output = await async_run(create_cmd, cwd=str(projects_root))
             
             if not success:
                 if "already exists" in output.lower():
