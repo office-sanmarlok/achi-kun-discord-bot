@@ -510,17 +510,30 @@ class CommandManager:
         # 少し待ってからプロンプトを送信
         await asyncio.sleep(3)
         
-        # ステージに応じたプロンプトを生成
+        # スレッド情報を準備
+        thread_info = {
+            'channel_name': thread.parent.name if thread.parent else 'Unknown',
+            'thread_name': thread.name,
+            'thread_id': thread_id
+        }
+        
+        # ステージに応じたプロンプトを生成（thread_infoとsession_numを渡す）
         if stage == "requirements":
-            prompt = self.bot.context_manager.generate_requirements_prompt(idea_name)
+            prompt = self.bot.context_manager.generate_requirements_prompt(
+                idea_name, thread_info=thread_info, session_num=session_num
+            )
         elif stage == "design":
-            prompt = self.bot.context_manager.generate_design_prompt(idea_name)
+            prompt = self.bot.context_manager.generate_design_prompt(
+                idea_name, thread_info=thread_info, session_num=session_num
+            )
         elif stage == "tasks":
-            prompt = self.bot.context_manager.generate_tasks_prompt(idea_name)
+            prompt = self.bot.context_manager.generate_tasks_prompt(
+                idea_name, thread_info=thread_info, session_num=session_num
+            )
         else:
             prompt = ""
         
-        # Flask経由でプロンプトを送信
+        # Flask経由でプロンプトを送信（プロンプトには既にコンテキストが含まれている）
         if prompt:
             success, msg = await self.prompt_sender.send_prompt(
                 session_num=session_num,
@@ -596,7 +609,19 @@ class CommandManager:
         # 少し待ってから開発プロンプトを送信
         await asyncio.sleep(3)
         
-        prompt = self.bot.context_manager.generate_development_prompt(idea_name)
+        # スレッド情報を準備
+        thread_info = {
+            'channel_name': thread.parent.name if thread.parent else 'Unknown',
+            'thread_name': thread.name,
+            'thread_id': thread_id
+        }
+        
+        # 開発プロンプトを生成（thread_infoとsession_numを渡す）
+        prompt = self.bot.context_manager.generate_development_prompt(
+            idea_name, thread_info=thread_info, session_num=session_num
+        )
+        
+        # Flask経由でプロンプトを送信（プロンプトには既にコンテキストが含まれている）
         success, msg = await self.prompt_sender.send_prompt(
             session_num=session_num,
             prompt=prompt,

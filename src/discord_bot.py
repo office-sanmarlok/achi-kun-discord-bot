@@ -592,24 +592,28 @@ class ClaudeCLIBot(commands.Bot):
             # 少し待ってからプロンプトを送信
             await asyncio.sleep(3)
             
-            # 初期コンテキストとプロンプトを送信
-            initial_context = {
+            # プロンプトを生成（thread_infoとsession_numを渡す）
+            thread_info = {
                 'channel_name': parent_message.channel.name,
-                'parent_message': {
-                    'author': parent_message.author.name,
-                    'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'content': parent_message.content
-                }
+                'thread_name': thread.name,
+                'thread_id': str(thread.id),
+                'author': parent_message.author.name,
+                'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'parent_content': parent_message.content
             }
             
-            prompt = self.context_manager.generate_idea_prompt(idea_name, parent_message.content)
+            prompt = self.context_manager.generate_idea_prompt(
+                idea_name, 
+                parent_message.content,
+                thread_info=thread_info,
+                session_num=session_num
+            )
             
-            success, msg = await self.prompt_sender.send_initial_context_and_prompt(
+            # Flask経由でプロンプトを送信（プロンプトには既にコンテキストが含まれている）
+            success, msg = await self.prompt_sender.send_prompt(
                 session_num=session_num,
-                thread_id=str(thread.id),
-                thread_name=thread.name,
-                initial_context=initial_context,
-                prompt=prompt
+                prompt=prompt,
+                thread_id=str(thread.id)
             )
             
             if not success:
@@ -736,27 +740,50 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             # 少し待ってから初期コンテキストを送信
             await asyncio.sleep(3)
             
-            # 初期コンテキストを送信
-            initial_context = {
-                'channel_name': parent_message.channel.name,
-                'parent_message': {
+            # テンプレートローダーを使ってコンテキストとプロンプトを生成
+            from src.claude_context_manager import PromptTemplateLoader
+            template_loader = PromptTemplateLoader()
+            
+            # cc.mdとcontext_base.mdを結合
+            template_content = template_loader.load_and_combine_templates("cc.md")
+            
+            if template_content:
+                # 変数を準備
+                variables = {
+                    'channel_name': parent_message.channel.name,
+                    'thread_name': thread.name,
+                    'thread_id': str(thread.id),
+                    'session_num': session_num,
                     'author': parent_message.author.name,
                     'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'content': parent_message.content
+                    'parent_content': parent_message.content
                 }
-            }
-            
-            # 初期コンテキストのみ送信（プロンプトなし）
-            context_message = bot.prompt_sender.build_initial_context(
-                session_num=session_num,
-                thread_id=str(thread.id),
-                thread_name=thread.name,
-                initial_context=initial_context
-            )
+                
+                # テンプレート変数を置換
+                prompt = template_loader.render_template(template_content, variables)
+            else:
+                # フォールバック（テンプレートが見つからない場合）
+                prompt = f"""=== Discord スレッド情報 ===
+チャンネル名: {parent_message.channel.name}
+スレッド名: {thread.name}
+スレッドID: {thread.id}
+セッション番号: {session_num}
+
+【重要】このセッションはDiscordのスレッド専用です。
+メッセージ送信は: dp {session_num} "メッセージ"
+
+=== 親メッセージ ===
+作成者: {parent_message.author.name}
+時刻: {parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+内容:
+{parent_message.content}
+===================
+
+このスレッドでメッセージを送信すると、Claude Codeに転送されます。"""
             
             success, msg = await bot.prompt_sender.send_prompt(
                 session_num=session_num,
-                prompt=context_message,
+                prompt=prompt,
                 thread_id=str(thread.id)
             )
             
