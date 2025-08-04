@@ -669,56 +669,6 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         
         await ctx.send(embed=embed)
     
-    @bot.command(name='sessions')
-    async def sessions_command(ctx):
-        """設定済みセッション一覧表示コマンド"""
-        sessions = settings.list_sessions()
-        if not sessions:
-            await ctx.send("No sessions configured.")
-            return
-        
-        lines = ["**Configured Sessions:**"]
-        for num, channel_id in sessions:
-            lines.append(f"Session {num}: <#{channel_id}>")
-        
-        await ctx.send("\n".join(lines))
-    
-    @bot.command(name='post')
-    async def post_command(ctx, target_channel: discord.TextChannel = None):
-        """現在のスレッド名を指定チャンネルに送信
-        
-        使用方法: !post #チャンネル名
-        スレッド内でのみ使用可能
-        """
-        # スレッド内での実行かチェック
-        if not hasattr(ctx.channel, 'parent') or ctx.channel.parent is None:
-            await ctx.send("❌ このコマンドはスレッド内でのみ使用可能です")
-            return
-        
-        # チャンネルが指定されていない場合
-        if not target_channel:
-            await ctx.send("❌ 送信先チャンネルを指定してください。使用方法: `!post #チャンネル名`")
-            return
-        
-        # スレッド名を取得
-        thread_name = ctx.channel.name
-        
-        # メッセージを送信
-        try:
-            message_content = f"スレッド名: {thread_name}"
-            await target_channel.send(message_content)
-            
-            # 成功メッセージ
-            await ctx.send(f"✅ スレッド名を{target_channel.name}に送信しました")
-            logger.info(f"Posted thread name '{thread_name}' to channel {target_channel.id}")
-            
-        except discord.Forbidden:
-            await ctx.send("❌ 指定されたチャンネルへのアクセス権限がありません")
-            logger.error(f"Permission denied for channel {target_channel.id}")
-        except Exception as e:
-            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
-            logger.error(f"Error in !post command: {e}", exc_info=True)
-    
     @bot.command(name='cc')
     async def cc_command(ctx, thread_name: str = None):
         """メッセージをスレッド化してClaude Codeセッションを開始
@@ -836,61 +786,6 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         except Exception as e:
             logger.error(f"Error in /thread command: {e}", exc_info=True)
             await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
-    
-    @bot.command(name='filegen')
-    async def filegen_command(ctx, file_name: str = None):
-        """指定された名前でprojectsディレクトリ内にサブディレクトリを作成
-        
-        使用方法: !filegen <file-name>
-        file-name: 小文字アルファベットとハイフンのみ使用可能
-        """
-        
-        # ファイル名の必須チェック
-        if not file_name:
-            await ctx.send("❌ ファイル名を指定してください。使用方法: `!filegen <file-name>`")
-            return
-        
-        # ファイル名のバリデーション（小文字アルファベットとハイフンのみ）
-        if not re.match(r'^[a-z]+(-[a-z]+)*$', file_name):
-            await ctx.send("❌ ファイル名は小文字アルファベットとハイフンのみ使用できます。例: `my-project`")
-            return
-        
-        # ファイル名の長さチェック
-        if len(file_name) > 50:
-            await ctx.send("❌ ファイル名は50文字以内にしてください。")
-            return
-        
-        try:
-            # プロジェクトのルートディレクトリを取得
-            project_root = Path(__file__).parent.parent
-            projects_dir = project_root / 'projects'
-            
-            # projectsディレクトリが存在しない場合は作成
-            if not projects_dir.exists():
-                projects_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"Created projects directory: {projects_dir}")
-            
-            # 作成するディレクトリのパス
-            target_dir = projects_dir / file_name
-            
-            # 既に存在する場合はエラー
-            if target_dir.exists():
-                await ctx.send(f"❌ ディレクトリ `{file_name}` は既に存在します。")
-                return
-            
-            # ディレクトリを作成
-            target_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 成功メッセージ
-            await ctx.send(f"✅ ディレクトリ `./projects/{file_name}` を作成しました。")
-            logger.info(f"Created directory: {target_dir}")
-            
-        except PermissionError:
-            await ctx.send("❌ ディレクトリを作成する権限がありません。")
-            logger.error(f"Permission denied creating directory: {file_name}")
-        except Exception as e:
-            await ctx.send(f"❌ エラーが発生しました: {str(e)[:100]}")
-            logger.error(f"Error in !filegen command: {e}", exc_info=True)
     
     @bot.command(name='idea')
     async def idea_command(ctx, idea_name: str = None):

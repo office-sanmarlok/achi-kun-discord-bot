@@ -17,6 +17,7 @@ from typing import List, Tuple, Optional
 import discord
 
 from src.prompt_sender import get_prompt_sender
+from lib.command_executor import async_run
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,7 @@ class CommandManager:
     
     async def handle_idea_complete(self, ctx) -> None:
         """#1-ideaでの!complete処理"""
-        thread_name = ctx.channel.name  # スレッド名 = idea-name
-        
-        # 進捗メッセージ
+        thread_name = ctx.channel.name
         loading_msg = await ctx.send("`...` 処理中...")
         
         try:
@@ -90,64 +89,19 @@ class CommandManager:
                 await loading_msg.edit(content=f"❌ プロジェクト `{thread_name}` が見つかりません")
                 return
             
-            # projectsディレクトリのGitリポジトリ初期化（必要な場合）
             projects_root = self.bot.project_manager.projects_root
-            if not (projects_root / ".git").exists():
-                success, output = await self.bot.project_manager.init_git_repository(projects_root)
-                if not success:
-                    await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
-                    return
-                
-                # 初回の場合、リモートリポジトリを設定
-                await loading_msg.edit(content="`...` プロジェクトリポジトリを設定中...")
-                await self._setup_projects_remote(projects_root, loading_msg)
             
-            # Git操作の実行（projectsディレクトリで実行）
-            git_commands = [
-                ["git", "add", f"{thread_name}/*"],
-                ["git", "commit", "-m", f"[{thread_name}] Complete idea phase"]
-            ]
-            
-            # リモートが設定されている場合のみpush
-            has_remote = await self._check_git_remote(projects_root)
-            if has_remote:
-                git_commands.append(["git", "push"])
-            
-            for cmd in git_commands:
-                success, output = await self.bot.project_manager.execute_git_command(projects_root, cmd)
-                if not success:
-                    # pushエラーの場合は警告のみ（リモートがない可能性）
-                    if cmd[1] == "push":
-                        logger.warning(f"Git push failed (may not have remote): {output}")
-                    # commitエラーで「nothing to commit」の場合は警告のみ
-                    elif cmd[1] == "commit" and "nothing to commit" in output.lower():
-                        logger.info("Nothing to commit, continuing...")
-                        await loading_msg.edit(content="`...` コミットする変更がありません。次のステップに進みます...")
-                        break  # commitがスキップされたらpushもスキップ
-                    else:
-                        error_detail = output if output else f"Command failed: {' '.join(cmd)}"
-                        await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
-                        return
-            
-            # 次チャンネルへの投稿
-            next_message = self.bot.context_manager.format_complete_message("idea", thread_name)
-            next_channel = self.bot.channel_validator.get_required_channel(ctx.guild, "requirements")
-            
-            if not next_channel:
-                await loading_msg.edit(content="❌ #2-requirementsチャンネルが見つかりません")
+            # Git操作の実行（共通メソッド呼び出し）
+            if not await self._execute_git_workflow(
+                projects_root, thread_name, "idea", loading_msg
+            ):
                 return
             
-            # メッセージ投稿とスレッド作成
-            message = await next_channel.send(next_message)
-            thread = await message.create_thread(name=thread_name)
-            
-            # セッション管理の更新
-            await self._setup_next_stage_session(
-                thread, thread_name, "requirements", project_path
+            # 次ステージへの遷移（共通メソッド呼び出し）
+            await self._transition_to_next_stage(
+                ctx, thread_name, "idea", "requirements", 
+                project_path, loading_msg
             )
-            
-            # 成功メッセージ
-            await loading_msg.edit(content=f"✅ idea フェーズが完了しました！\n次フェーズ: {next_channel.mention}")
             
         except Exception as e:
             logger.error(f"Error in handle_idea_complete: {e}", exc_info=True)
@@ -156,7 +110,6 @@ class CommandManager:
     async def handle_requirements_complete(self, ctx) -> None:
         """#2-requirementsでの!complete処理"""
         thread_name = ctx.channel.name
-        
         loading_msg = await ctx.send("`...` 処理中...")
         
         try:
@@ -164,62 +117,17 @@ class CommandManager:
             project_path = self.bot.project_manager.get_project_path(thread_name)
             projects_root = self.bot.project_manager.projects_root
             
-            # projectsディレクトリのGitリポジトリ初期化（必要な場合）
-            if not (projects_root / ".git").exists():
-                success, output = await self.bot.project_manager.init_git_repository(projects_root)
-                if not success:
-                    await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
-                    return
-                
-                # 初回の場合、リモートリポジトリを設定
-                await loading_msg.edit(content="`...` プロジェクトリポジトリを設定中...")
-                await self._setup_projects_remote(projects_root, loading_msg)
-            
-            # Git操作（projectsディレクトリで実行）
-            git_commands = [
-                ["git", "add", f"{thread_name}/*"],
-                ["git", "commit", "-m", f"[{thread_name}] Complete requirements phase"]
-            ]
-            
-            # リモートが設定されている場合のみpush
-            has_remote = await self._check_git_remote(projects_root)
-            if has_remote:
-                git_commands.append(["git", "push"])
-            
-            for cmd in git_commands:
-                success, output = await self.bot.project_manager.execute_git_command(projects_root, cmd)
-                if not success:
-                    # pushエラーの場合はスキップ（リモートがない可能性）
-                    if cmd[1] == "push":
-                        logger.warning(f"Git push skipped (may not have remote): {output}")
-                    # commitエラーで「nothing to commit」の場合は続行
-                    elif cmd[1] == "commit" and "nothing to commit" in output.lower():
-                        logger.info("Nothing to commit, continuing...")
-                        await loading_msg.edit(content="`...` コミットする変更がありません。次のステップに進みます...")
-                        break  # commitがスキップされたらpushもスキップ
-                    else:
-                        error_detail = output if output else f"Command failed: {' '.join(cmd)}"
-                        await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
-                        return
-            
-            # 次チャンネルへの投稿
-            next_message = self.bot.context_manager.format_complete_message("requirements", thread_name)
-            next_channel = self.bot.channel_validator.get_required_channel(ctx.guild, "design")
-            
-            if not next_channel:
-                await loading_msg.edit(content="❌ #3-designチャンネルが見つかりません")
+            # Git操作の実行（共通メソッド呼び出し）
+            if not await self._execute_git_workflow(
+                projects_root, thread_name, "requirements", loading_msg
+            ):
                 return
             
-            # メッセージ投稿とスレッド作成
-            message = await next_channel.send(next_message)
-            thread = await message.create_thread(name=thread_name)
-            
-            # セッション管理の更新
-            await self._setup_next_stage_session(
-                thread, thread_name, "design", project_path
+            # 次ステージへの遷移（共通メソッド呼び出し）
+            await self._transition_to_next_stage(
+                ctx, thread_name, "requirements", "design", 
+                project_path, loading_msg
             )
-            
-            await loading_msg.edit(content=f"✅ requirements フェーズが完了しました！\n次フェーズ: {next_channel.mention}")
             
         except Exception as e:
             logger.error(f"Error in handle_requirements_complete: {e}", exc_info=True)
@@ -228,7 +136,6 @@ class CommandManager:
     async def handle_design_complete(self, ctx) -> None:
         """#3-designでの!complete処理"""
         thread_name = ctx.channel.name
-        
         loading_msg = await ctx.send("`...` 処理中...")
         
         try:
@@ -236,62 +143,17 @@ class CommandManager:
             project_path = self.bot.project_manager.get_project_path(thread_name)
             projects_root = self.bot.project_manager.projects_root
             
-            # projectsディレクトリのGitリポジトリ初期化（必要な場合）
-            if not (projects_root / ".git").exists():
-                success, output = await self.bot.project_manager.init_git_repository(projects_root)
-                if not success:
-                    await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
-                    return
-                
-                # 初回の場合、リモートリポジトリを設定
-                await loading_msg.edit(content="`...` プロジェクトリポジトリを設定中...")
-                await self._setup_projects_remote(projects_root, loading_msg)
-            
-            # Git操作（projectsディレクトリで実行）
-            git_commands = [
-                ["git", "add", f"{thread_name}/*"],
-                ["git", "commit", "-m", f"[{thread_name}] Complete design phase"]
-            ]
-            
-            # リモートが設定されている場合のみpush
-            has_remote = await self._check_git_remote(projects_root)
-            if has_remote:
-                git_commands.append(["git", "push"])
-            
-            for cmd in git_commands:
-                success, output = await self.bot.project_manager.execute_git_command(projects_root, cmd)
-                if not success:
-                    # pushエラーの場合はスキップ（リモートがない可能性）
-                    if cmd[1] == "push":
-                        logger.warning(f"Git push skipped (may not have remote): {output}")
-                    # commitエラーで「nothing to commit」の場合は続行
-                    elif cmd[1] == "commit" and "nothing to commit" in output.lower():
-                        logger.info("Nothing to commit, continuing...")
-                        await loading_msg.edit(content="`...` コミットする変更がありません。次のステップに進みます...")
-                        break  # commitがスキップされたらpushもスキップ
-                    else:
-                        error_detail = output if output else f"Command failed: {' '.join(cmd)}"
-                        await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
-                        return
-            
-            # 次チャンネルへの投稿
-            next_message = self.bot.context_manager.format_complete_message("design", thread_name)
-            next_channel = self.bot.channel_validator.get_required_channel(ctx.guild, "tasks")
-            
-            if not next_channel:
-                await loading_msg.edit(content="❌ #4-tasksチャンネルが見つかりません")
+            # Git操作の実行（共通メソッド呼び出し）
+            if not await self._execute_git_workflow(
+                projects_root, thread_name, "design", loading_msg
+            ):
                 return
             
-            # メッセージ投稿とスレッド作成
-            message = await next_channel.send(next_message)
-            thread = await message.create_thread(name=thread_name)
-            
-            # セッション管理の更新
-            await self._setup_next_stage_session(
-                thread, thread_name, "tasks", project_path
+            # 次ステージへの遷移（共通メソッド呼び出し）
+            await self._transition_to_next_stage(
+                ctx, thread_name, "design", "tasks", 
+                project_path, loading_msg
             )
-            
-            await loading_msg.edit(content=f"✅ design フェーズが完了しました！\n次フェーズ: {next_channel.mention}")
             
         except Exception as e:
             logger.error(f"Error in handle_design_complete: {e}", exc_info=True)
@@ -300,7 +162,6 @@ class CommandManager:
     async def handle_tasks_complete(self, ctx) -> None:
         """#4-tasksでの!complete処理（GitHub リポジトリ作成を含む）"""
         thread_name = ctx.channel.name
-        
         loading_msg = await ctx.send("`...` 処理中...")
         
         try:
@@ -308,159 +169,20 @@ class CommandManager:
             project_path = self.bot.project_manager.get_project_path(thread_name)
             projects_root = self.bot.project_manager.projects_root
             
-            # projectsディレクトリのGitリポジトリ初期化（必要な場合）
-            if not (projects_root / ".git").exists():
-                success, output = await self.bot.project_manager.init_git_repository(projects_root)
-                if not success:
-                    await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
-                    return
-                
-                # 初回の場合、リモートリポジトリを設定
-                await loading_msg.edit(content="`...` プロジェクトリポジトリを設定中...")
-                await self._setup_projects_remote(projects_root, loading_msg)
-            
-            # Git操作（projectsディレクトリで実行）
-            git_commands = [
-                ["git", "add", f"{thread_name}/*"],
-                ["git", "commit", "-m", f"[{thread_name}] Complete tasks phase"]
-            ]
-            
-            # リモートが設定されている場合のみpush
-            has_remote = await self._check_git_remote(projects_root)
-            if has_remote:
-                git_commands.append(["git", "push"])
-            
-            for cmd in git_commands:
-                success, output = await self.bot.project_manager.execute_git_command(projects_root, cmd)
-                if not success:
-                    # pushエラーの場合はスキップ（リモートがない可能性）
-                    if cmd[1] == "push":
-                        logger.warning(f"Git push skipped (may not have remote): {output}")
-                    # commitエラーで「nothing to commit」の場合は続行
-                    elif cmd[1] == "commit" and "nothing to commit" in output.lower():
-                        logger.info("Nothing to commit, continuing...")
-                        await loading_msg.edit(content="`...` コミットする変更がありません。次のステップに進みます...")
-                        break  # commitがスキップされたらpushもスキップ
-                    else:
-                        error_detail = output if output else f"Command failed: {' '.join(cmd)}"
-                        await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
-                        return
-            
-            # 開発ディレクトリへのコピー
-            try:
-                dev_path = self.bot.project_manager.copy_to_development(thread_name)
-            except FileExistsError:
-                await loading_msg.edit(content=f"❌ 開発ディレクトリ `{thread_name}` は既に存在します")
+            # 1. 通常のGit操作（共通メソッド呼び出し）
+            if not await self._execute_git_workflow(
+                projects_root, thread_name, "tasks", loading_msg
+            ):
                 return
             
-            # GitHubワークフローのコピー
-            self.bot.project_manager.copy_github_workflows(thread_name)
-            
-            # 開発ディレクトリでGit初期化
-            success, output = await self.bot.project_manager.init_git_repository(dev_path)
-            if not success:
-                await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
-                return
-            
-            # GitHubリポジトリ作成（正しい構文で）
-            create_repo_cmd = ["gh", "repo", "create", thread_name, "--public", "--source=.", "--remote=origin"]
-            success, output = await self._run_command(create_repo_cmd, cwd=str(dev_path))
-            
-            # リポジトリ作成が成功した場合、リモートURLをHTTPSに変更
-            # （SSHキーが設定されていない環境でも動作するように）
-            if success:
-                github_user = await self._get_github_user()
-                https_url = f"https://github.com/{github_user}/{thread_name}.git"
-                
-                # リモートURLをHTTPSに設定
-                set_url_cmd = ["git", "remote", "set-url", "origin", https_url]
-                success_url, output_url = await self.bot.project_manager.execute_git_command(dev_path, set_url_cmd)
-                
-                if success_url:
-                    logger.info(f"Remote URL set to HTTPS: {https_url}")
-                else:
-                    logger.warning(f"Failed to set HTTPS URL, keeping SSH: {output_url}")
-            
-            if not success:
-                # リポジトリが既に存在する場合は、リモートを手動で追加
-                if "already exists" in output.lower():
-                    logger.info("Repository already exists, adding remote...")
-                    github_user = await self._get_github_user()
-                    # HTTPSを使用（SSHキーが設定されていない環境でも動作）
-                    https_url = f"https://github.com/{github_user}/{thread_name}.git"
-                    
-                    # 既存のリモートを削除（存在する場合）
-                    await self.bot.project_manager.execute_git_command(dev_path, ["git", "remote", "remove", "origin"])
-                    
-                    # 新しいリモートを追加（HTTPS）
-                    add_remote_cmd = ["git", "remote", "add", "origin", https_url]
-                    success, output = await self.bot.project_manager.execute_git_command(dev_path, add_remote_cmd)
-                    
-                    if not success:
-                        logger.error(f"Failed to add remote: {output}")
-                else:
-                    await loading_msg.edit(content=f"❌ GitHubリポジトリ作成エラー:\n```\n{output}\n```\n`gh auth login`で認証を確認してください")
-                    return
-            
-            # 現在のブランチ名を取得
-            success, branch_name = await self.bot.project_manager.execute_git_command(
-                dev_path, ["git", "branch", "--show-current"]
+            # 2. 開発環境セットアップ（tasks特有の処理）
+            dev_path, github_url = await self._setup_development_environment(
+                thread_name, loading_msg
             )
-            if not success:
-                # ブランチが取得できない場合はデフォルトブランチを作成
-                await self.bot.project_manager.execute_git_command(
-                    dev_path, ["git", "checkout", "-b", "main"]
-                )
-                branch_name = "main"
-            else:
-                branch_name = branch_name.strip()
-                if not branch_name:
-                    # ブランチ名が空の場合（初期状態）
-                    await self.bot.project_manager.execute_git_command(
-                        dev_path, ["git", "checkout", "-b", "main"]
-                    )
-                    branch_name = "main"
+            if not dev_path:
+                return  # エラーメッセージは既に表示済み
             
-            # 初期コミットとプッシュ
-            dev_git_commands = [
-                ["git", "add", "."],
-                ["git", "commit", "-m", "Initial commit"],
-                ["git", "push", "-u", "origin", branch_name]
-            ]
-            
-            commit_skipped = False
-            for cmd in dev_git_commands:
-                # コミットがスキップされた場合、pushもスキップ
-                if commit_skipped and cmd[1] == "push":
-                    logger.info("Skipping push since there was nothing to commit")
-                    continue
-                    
-                success, output = await self.bot.project_manager.execute_git_command(dev_path, cmd)
-                if not success:
-                    # commitエラーで「nothing to commit」の場合は続行
-                    if cmd[1] == "commit" and "nothing to commit" in output.lower():
-                        logger.info("Nothing to commit in development directory, continuing...")
-                        await loading_msg.edit(content="`...` コミットする変更がありません。")
-                        commit_skipped = True
-                        continue  # 次のコマンドへ
-                    # pushエラーでリモートの問題の場合
-                    elif cmd[1] == "push" and ("Could not read from remote repository" in output or 
-                                                "fatal: 'origin' does not appear" in output or
-                                                "Permission denied" in output or
-                                                "fatal: unable to access" in output):
-                        logger.warning(f"Push failed due to remote issues: {output}")
-                        await loading_msg.edit(content=f"`...` リモートリポジトリへのプッシュをスキップします。\n（リポジトリは作成済み: https://github.com/{await self._get_github_user()}/{thread_name}）")
-                        continue
-                    else:
-                        # エラーメッセージが空の場合はコマンドを表示
-                        error_detail = output if output else f"Command failed: {' '.join(cmd)}"
-                        await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
-                        return
-            
-            # GitHubのURLを取得
-            github_url = f"https://github.com/{await self._get_github_user()}/{thread_name}"
-            
-            # 次チャンネルへの投稿
+            # 3. 次ステージへの遷移（開発用の特別なセッション設定）
             next_message = self.bot.context_manager.format_complete_message("tasks", thread_name)
             next_channel = self.bot.channel_validator.get_required_channel(ctx.guild, "development")
             
@@ -468,7 +190,6 @@ class CommandManager:
                 await loading_msg.edit(content="❌ #5-developmentチャンネルが見つかりません")
                 return
             
-            # メッセージ投稿とスレッド作成
             message = await next_channel.send(next_message)
             thread = await message.create_thread(name=thread_name)
             
@@ -486,6 +207,259 @@ class CommandManager:
         except Exception as e:
             logger.error(f"Error in handle_tasks_complete: {e}", exc_info=True)
             await loading_msg.edit(content=f"❌ エラーが発生しました: {str(e)[:100]}")
+    
+    async def _execute_git_workflow(
+        self,
+        projects_root: Path,
+        thread_name: str,
+        phase_name: str,
+        loading_msg: discord.Message
+    ) -> bool:
+        """
+        Git操作の共通ワークフロー実行
+        
+        Args:
+            projects_root: プロジェクトのルートディレクトリ
+            thread_name: スレッド名（プロジェクト名）
+            phase_name: フェーズ名（idea, requirements, design, tasks）
+            loading_msg: 進捗表示用メッセージ
+        
+        Returns:
+            bool: 成功した場合True、失敗した場合False
+        
+        Raises:
+            なし（エラーはFalseを返すことで処理）
+        """
+        # Gitリポジトリの存在確認
+        if not (projects_root / ".git").exists():
+            success, output = await self.bot.project_manager.init_git_repository(projects_root)
+            if not success:
+                await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
+                return False
+            
+            # 初回の場合、リモートリポジトリを設定
+            await loading_msg.edit(content="`...` プロジェクトリポジトリを設定中...")
+            await self._setup_projects_remote(projects_root, loading_msg)
+        
+        # Git操作コマンドの定義
+        git_commands = [
+            ["git", "add", "."],  # projects全体をステージング
+            ["git", "commit", "-m", f"[{thread_name}] Complete {phase_name} phase"]
+        ]
+        
+        # リモート確認とpush追加
+        has_remote = await self._check_git_remote(projects_root)
+        if has_remote:
+            git_commands.append(["git", "push"])
+        
+        # コマンド実行
+        for cmd in git_commands:
+            success, output = await self.bot.project_manager.execute_git_command(projects_root, cmd)
+            if not success:
+                # pushエラーの場合は警告のみ
+                if cmd[1] == "push":
+                    logger.warning(f"Git push failed (may not have remote): {output}")
+                # commitエラーで「nothing to commit」の場合は警告のみ
+                elif cmd[1] == "commit" and "nothing to commit" in output.lower():
+                    logger.info("Nothing to commit, continuing...")
+                    await loading_msg.edit(content="`...` コミットする変更がありません。次のステップに進みます...")
+                    break  # commitがスキップされたらpushもスキップ
+                else:
+                    error_detail = output if output else f"Command failed: {' '.join(cmd)}"
+                    await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
+                    return False
+        
+        return True
+    
+    async def _transition_to_next_stage(
+        self,
+        ctx,
+        thread_name: str,
+        current_stage: str,
+        next_stage: str,
+        project_path: Path,
+        loading_msg: discord.Message
+    ) -> bool:
+        """
+        次のステージへの遷移処理
+        
+        Args:
+            ctx: コマンドコンテキスト
+            thread_name: スレッド名
+            current_stage: 現在のステージ
+            next_stage: 次のステージ
+            project_path: プロジェクトパス
+            loading_msg: 進捗表示用メッセージ
+        
+        Returns:
+            bool: 成功した場合True、失敗した場合False
+        """
+        # メッセージフォーマット
+        next_message = self.bot.context_manager.format_complete_message(current_stage, thread_name)
+        
+        # 次チャンネル取得
+        next_channel = self.bot.channel_validator.get_required_channel(ctx.guild, next_stage)
+        if not next_channel:
+            stage_number = {
+                "requirements": "2",
+                "design": "3", 
+                "tasks": "4",
+                "development": "5"
+            }.get(next_stage, "?")
+            await loading_msg.edit(content=f"❌ #{stage_number}-{next_stage}チャンネルが見つかりません")
+            return False
+        
+        # メッセージ投稿とスレッド作成
+        message = await next_channel.send(next_message)
+        thread = await message.create_thread(name=thread_name)
+        
+        # セッション管理の更新
+        await self._setup_next_stage_session(
+            thread, thread_name, next_stage, project_path
+        )
+        
+        # 成功メッセージ
+        await loading_msg.edit(
+            content=f"✅ {current_stage} フェーズが完了しました！\n次フェーズ: {next_channel.mention}"
+        )
+        
+        return True
+    
+    async def _setup_development_environment(
+        self,
+        thread_name: str,
+        loading_msg: discord.Message
+    ) -> Tuple[Optional[Path], Optional[str]]:
+        """
+        開発環境のセットアップ（tasksフェーズ専用）
+        
+        Args:
+            thread_name: スレッド名（プロジェクト名）
+            loading_msg: 進捗表示用メッセージ
+        
+        Returns:
+            Tuple[Optional[Path], Optional[str]]: (開発パス, GitHub URL) or (None, None) if error
+        """
+        try:
+            # 開発ディレクトリへのコピー
+            try:
+                dev_path = self.bot.project_manager.copy_to_development(thread_name)
+            except FileExistsError:
+                await loading_msg.edit(content=f"❌ 開発ディレクトリ `{thread_name}` は既に存在します")
+                return None, None
+            
+            # GitHubワークフローのコピー
+            self.bot.project_manager.copy_github_workflows(thread_name)
+            
+            # 開発ディレクトリでGit初期化
+            success, output = await self.bot.project_manager.init_git_repository(dev_path)
+            if not success:
+                await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
+                return None, None
+            
+            # GitHubリポジトリ作成
+            create_repo_cmd = ["gh", "repo", "create", thread_name, "--public", "--source=.", "--remote=origin"]
+            success, output = await async_run(create_repo_cmd, cwd=str(dev_path))
+            
+            # GitHub ユーザー名取得
+            github_user = await self._get_github_user()
+            https_url = f"https://github.com/{github_user}/{thread_name}.git"
+            
+            if success:
+                # リモートURLをHTTPSに設定
+                set_url_cmd = ["git", "remote", "set-url", "origin", https_url]
+                success_url, output_url = await self.bot.project_manager.execute_git_command(dev_path, set_url_cmd)
+                
+                if success_url:
+                    logger.info(f"Remote URL set to HTTPS: {https_url}")
+                else:
+                    logger.warning(f"Failed to set HTTPS URL, keeping SSH: {output_url}")
+            
+            elif "already exists" in output.lower():
+                # 既存リポジトリの場合、リモートを手動で追加
+                logger.info("Repository already exists, adding remote...")
+                
+                # 既存のリモートを削除（存在する場合）
+                await self.bot.project_manager.execute_git_command(dev_path, ["git", "remote", "remove", "origin"])
+                
+                # 新しいリモートを追加（HTTPS）
+                add_remote_cmd = ["git", "remote", "add", "origin", https_url]
+                success, output = await self.bot.project_manager.execute_git_command(dev_path, add_remote_cmd)
+                
+                if not success:
+                    logger.error(f"Failed to add remote: {output}")
+                    await loading_msg.edit(content=f"❌ リモート追加エラー:\n```\n{output}\n```")
+                    return None, None
+            else:
+                await loading_msg.edit(
+                    content=f"❌ GitHubリポジトリ作成エラー:\n```\n{output}\n```\n`gh auth login`で認証を確認してください"
+                )
+                return None, None
+            
+            # 現在のブランチ名を取得
+            success, branch_name = await self.bot.project_manager.execute_git_command(
+                dev_path, ["git", "branch", "--show-current"]
+            )
+            
+            if not success or not branch_name.strip():
+                # ブランチが取得できない場合はデフォルトブランチを作成
+                await self.bot.project_manager.execute_git_command(
+                    dev_path, ["git", "checkout", "-b", "main"]
+                )
+                branch_name = "main"
+            else:
+                branch_name = branch_name.strip()
+            
+            # 初期コミットとプッシュ
+            dev_git_commands = [
+                ["git", "add", "."],
+                ["git", "commit", "-m", "Initial commit"],
+                ["git", "push", "-u", "origin", branch_name]
+            ]
+            
+            commit_skipped = False
+            for cmd in dev_git_commands:
+                # コミットがスキップされた場合、pushもスキップ
+                if commit_skipped and cmd[1] == "push":
+                    logger.info("Skipping push since there was nothing to commit")
+                    continue
+                
+                success, output = await self.bot.project_manager.execute_git_command(dev_path, cmd)
+                if not success:
+                    # commitエラーで「nothing to commit」の場合は続行
+                    if cmd[1] == "commit" and "nothing to commit" in output.lower():
+                        logger.info("Nothing to commit in development directory, continuing...")
+                        await loading_msg.edit(content="`...` コミットする変更がありません。")
+                        commit_skipped = True
+                        continue
+                    # pushエラーでリモートの問題の場合
+                    elif cmd[1] == "push" and any(err in output for err in [
+                        "Could not read from remote repository",
+                        "fatal: 'origin' does not appear",
+                        "Permission denied",
+                        "fatal: unable to access"
+                    ]):
+                        logger.warning(f"Push failed due to remote issues: {output}")
+                        await loading_msg.edit(
+                            content=f"`...` リモートリポジトリへのプッシュをスキップします。\n"
+                            f"（リポジトリは作成済み: {https_url}）"
+                        )
+                        continue
+                    else:
+                        # その他のエラー
+                        error_detail = output if output else f"Command failed: {' '.join(cmd)}"
+                        await loading_msg.edit(content=f"❌ Gitエラー:\n```\n{error_detail}\n```")
+                        # pushエラーの場合は続行、それ以外は失敗
+                        if cmd[1] != "push":
+                            return None, None
+            
+            github_url = f"https://github.com/{github_user}/{thread_name}"
+            return dev_path, github_url
+        
+        except Exception as e:
+            logger.error(f"Error in _setup_development_environment: {e}", exc_info=True)
+            await loading_msg.edit(content=f"❌ 開発環境セットアップエラー: {str(e)[:100]}")
+            return None, None
     
     async def _setup_next_stage_session(self, thread: discord.Thread, idea_name: str, 
                                       stage: str, project_path: Path) -> None:
@@ -641,38 +615,9 @@ class CommandManager:
             f"tasks.mdに従って開発を進めてください。"
         )
     
-    async def _run_command(self, command: List[str], cwd: Optional[str] = None) -> Tuple[bool, str]:
-        """
-        非同期でコマンドを実行
-        
-        Args:
-            command: 実行するコマンドのリスト
-            cwd: 作業ディレクトリ
-            
-        Returns:
-            (成功フラグ, 出力メッセージ)
-        """
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                return True, stdout.decode('utf-8').strip()
-            else:
-                return False, stderr.decode('utf-8').strip()
-                
-        except Exception as e:
-            return False, str(e)
-    
     async def _get_github_user(self) -> str:
         """GitHub ユーザー名を取得"""
-        success, output = await self._run_command(["gh", "api", "user", "--jq", ".login"])
+        success, output = await async_run(["gh", "api", "user", "--jq", ".login"])
         if success:
             return output.strip()
         return "unknown"
@@ -697,7 +642,7 @@ class CommandManager:
             create_cmd = ["gh", "repo", "create", "claude-projects", 
                          "--private", "--source", ".", "--remote", "origin",
                          "--description", "Claude Code project documentation repository"]
-            success, output = await self._run_command(create_cmd, cwd=str(projects_root))
+            success, output = await async_run(create_cmd, cwd=str(projects_root))
             
             if not success:
                 if "already exists" in output.lower():

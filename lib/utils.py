@@ -109,20 +109,6 @@ def is_service_running(service_name: str) -> bool:
     # Check if any matching process is running
     return len(processes) > 0
 
-def is_service_running_legacy(service_name: str) -> bool:
-    """サービスが実行中かチェック（PIDファイルベース・レガシー）"""
-    pid = read_pid_file(service_name)
-    if pid is None:
-        return False
-    
-    try:
-        # Check if process exists
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        # Process doesn't exist, clean up PID file
-        remove_pid_file(service_name)
-        return False
 
 def stop_service(service_name: str) -> bool:
     """サービスを停止"""
@@ -206,16 +192,6 @@ def remove_from_path(directory: Path) -> bool:
     rc_file.write_text('\n'.join(filtered_lines))
     return True
 
-def format_session_list(sessions: List[tuple]) -> str:
-    """セッションリストをフォーマット"""
-    if not sessions:
-        return "No sessions configured"
-    
-    lines = []
-    for num, channel_id in sessions:
-        lines.append(f"  Session {num}: {channel_id}")
-    
-    return '\n'.join(lines)
 
 if __name__ == "__main__":
     # Test utilities
