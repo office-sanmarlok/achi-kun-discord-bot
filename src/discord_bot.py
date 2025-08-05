@@ -444,7 +444,7 @@ class ClaudeCLIBot(commands.Bot):
         claude_options = self.settings.get_claude_options()
         
         # claudeコマンドを構築（ロケール設定を追加）
-        claude_cmd = f"export LANG=ja_JP.UTF-8 && export LC_ALL=ja_JP.UTF-8 && cd {work_dir} && claude {claude_options}".strip()
+        claude_cmd = f"export LANG=C.UTF-8 && export LC_ALL=C.UTF-8 && cd {work_dir} && claude {claude_options}".strip()
         cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         
         try:

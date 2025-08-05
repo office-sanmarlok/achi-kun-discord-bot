@@ -593,7 +593,7 @@ class CommandManager:
         
         # Claude Codeセッションの開始（作業ディレクトリを指定、ロケール設定を追加）
         session_name = f"claude-session-{session_num}"
-        claude_cmd = f"export LANG=ja_JP.UTF-8 && export LC_ALL=ja_JP.UTF-8 && cd {working_dir} && claude {self.settings.get_claude_options()}".strip()
+        claude_cmd = f"export LANG=C.UTF-8 && export LC_ALL=C.UTF-8 && cd {working_dir} && claude {self.settings.get_claude_options()}".strip()
         cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         
         try:
