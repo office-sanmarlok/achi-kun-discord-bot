@@ -198,6 +198,9 @@ class CommandManager:
                 thread, thread_name, str(dev_path), github_url
             )
             
+            # 現在のセッションを終了
+            await self._terminate_current_session(ctx)
+            
             await loading_msg.edit(
                 content=f"✅ tasks フェーズが完了しました！\n"
                 f"🚀 GitHubリポジトリ: {github_url}\n"
@@ -317,6 +320,9 @@ class CommandManager:
         await self._setup_next_stage_session(
             thread, thread_name, next_stage, project_path
         )
+        
+        # 現在のセッションを終了
+        await self._terminate_current_session(ctx)
         
         # 成功メッセージ
         await loading_msg.edit(
@@ -708,3 +714,36 @@ class CommandManager:
         except Exception as e:
             logger.error(f"Error setting up projects remote: {e}")
             return False
+    
+    async def _terminate_current_session(self, ctx) -> None:
+        """
+        現在のスレッドのtmuxセッションを終了
+        
+        Args:
+            ctx: コマンドコンテキスト
+        """
+        try:
+            from src.tmux_manager import TmuxManager
+            from src.session_manager import get_session_manager
+            
+            tmux_manager = TmuxManager()
+            session_manager = get_session_manager()
+            
+            # 現在のスレッドIDからセッション番号を取得
+            thread_id = str(ctx.channel.id)
+            session_num = session_manager.get_session(thread_id)
+            
+            if session_num is not None:
+                # tmuxセッションを終了
+                if tmux_manager.kill_claude_session(session_num):
+                    # SessionManagerからも削除
+                    session_manager.remove_session(thread_id)
+                    logger.info(f"Terminated session {session_num} for thread {thread_id}")
+                else:
+                    logger.warning(f"Failed to terminate tmux session {session_num}")
+            else:
+                logger.debug(f"No active session found for thread {thread_id}")
+                
+        except Exception as e:
+            logger.error(f"Error terminating session: {e}")
+            # エラーが発生してもワークフローは継続
