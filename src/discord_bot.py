@@ -94,13 +94,8 @@ class MessageProcessor:
             attachment_parts = [f"[添付画像のファイルパス: {path}]" for path in attachment_paths]
             attachment_str = " " + " ".join(attachment_parts)
         
-        # メッセージタイプによる分岐処理
-        if content.startswith('/'):
-            # スラッシュコマンド形式（直接Claude Codeコマンド実行）
-            return f"{content}{attachment_str} session={session_num}"
-        else:
-            # 通常メッセージ形式（Claude Codeへの通知）
-            return f"Discordからの通知: {content}{attachment_str} session={session_num}"
+        # メッセージにファイルパスを追加して返す
+        return f"{content}{attachment_str}"
 
 class ClaudeCLIBot(commands.Bot):
     """
