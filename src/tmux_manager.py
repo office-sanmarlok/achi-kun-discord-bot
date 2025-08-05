@@ -142,12 +142,12 @@ class TmuxManager:
             return True
         
         try:
-            # Build Claude command
-            claude_cmd = f"cd \"{work_dir}\" && claude {options}".strip()
+            # Build Claude command with locale settings
+            claude_cmd = f"export LANG=ja_JP.UTF-8 && export LC_ALL=ja_JP.UTF-8 && cd \"{work_dir}\" && claude {options}".strip()
             
             # Create new detached session with Claude Code
             subprocess.run(
-                ["tmux", "new-session", "-d", "-s", session_name, claude_cmd],
+                ["tmux", "new-session", "-d", "-s", session_name, "bash", "-c", claude_cmd],
                 check=True
             )
             print(f"✅ Created Claude session {session_num}: {session_name}")

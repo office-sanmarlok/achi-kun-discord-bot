@@ -513,8 +513,8 @@ class CommandManager:
             project_path=str(project_path)
         )
         
-        # 少し待ってからプロンプトを送信
-        await asyncio.sleep(3)
+        # Claude Codeの起動完了を待ってからプロンプトを送信
+        await asyncio.sleep(8)  # 3秒から8秒に延長
         
         # スレッド情報を準備
         thread_info = {
@@ -591,9 +591,9 @@ class CommandManager:
         session_manager.update_project_stage(idea_name, "development")
         session_manager.add_thread_to_workflow(idea_name, "5-development", thread_id)
         
-        # Claude Codeセッションの開始（作業ディレクトリを指定）
+        # Claude Codeセッションの開始（作業ディレクトリを指定、ロケール設定を追加）
         session_name = f"claude-session-{session_num}"
-        claude_cmd = f"cd {working_dir} && claude {self.settings.get_claude_options()}".strip()
+        claude_cmd = f"export LANG=ja_JP.UTF-8 && export LC_ALL=ja_JP.UTF-8 && cd {working_dir} && claude {self.settings.get_claude_options()}".strip()
         cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         
         try:
