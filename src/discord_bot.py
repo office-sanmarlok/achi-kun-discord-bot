@@ -584,8 +584,8 @@ class ClaudeCLIBot(commands.Bot):
             # Claude Codeセッションを開始（project-wslディレクトリで）
             await self._start_claude_session(session_num, thread.name, working_dir)
             
-            # 少し待ってからプロンプトを送信
-            await asyncio.sleep(3)
+            # Claude Codeの起動完了を待ってからプロンプトを送信
+            await asyncio.sleep(8)  # 3秒から8秒に延長
             
             # プロンプトを生成（thread_infoとsession_numを渡す）
             thread_info = {
@@ -732,8 +732,8 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
                 working_directory=bot.settings.get_claude_work_dir()
             )
             
-            # 少し待ってから初期コンテキストを送信
-            await asyncio.sleep(3)
+            # Claude Codeの起動完了を待ってから初期コンテキストを送信
+            await asyncio.sleep(8)  # 3秒から8秒に延長
             
             # テンプレートローダーを使ってコンテキストとプロンプトを生成
             from src.claude_context_manager import PromptTemplateLoader
@@ -830,6 +830,87 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         ※ #1-idea, #2-requirements, #3-design, #4-tasksのスレッド内で実行
         """
         await bot.command_manager.process_complete_command(ctx)
+    
+    @bot.command(name='stop')
+    async def stop_command(ctx, target: str = None):
+        """tmuxセッションを終了するコマンド
+        
+        使用方法:
+        - !stop             : 現在のスレッドのセッションを終了
+        - !stop <番号>      : 指定したセッション番号を終了
+        - !stop all         : 全てのセッションを終了（管理者のみ）
+        """
+        from src.tmux_manager import TmuxManager
+        from src.session_manager import get_session_manager
+        
+        tmux_manager = TmuxManager()
+        session_manager = get_session_manager()
+        
+        # スレッド内での実行チェック
+        if target is None and ctx.channel.type != discord.ChannelType.public_thread:
+            await ctx.send("❌ このチャンネルでは`!stop`を使用できません。スレッド内で実行するか、セッション番号を指定してください。")
+            return
+        
+        loading_msg = await ctx.send("`...` セッション終了処理中...")
+        
+        try:
+            if target is None:
+                # 現在のスレッドのセッションを終了
+                thread_id = str(ctx.channel.id)
+                session_num = session_manager.get_session(thread_id)
+                
+                if session_num is None:
+                    await loading_msg.edit(content="❌ このスレッドにはアクティブなセッションがありません")
+                    return
+                
+                # tmuxセッションを終了
+                if tmux_manager.kill_claude_session(session_num):
+                    # SessionManagerからも削除
+                    session_manager.remove_session(thread_id)
+                    await loading_msg.edit(content=f"✅ セッション {session_num} を終了しました")
+                else:
+                    await loading_msg.edit(content=f"⚠️ セッション {session_num} の終了に失敗しました")
+                    
+            elif target.lower() == "all":
+                # 管理者権限チェック（必要に応じて）
+                # if not ctx.author.guild_permissions.administrator:
+                #     await loading_msg.edit(content="❌ 全セッション終了には管理者権限が必要です")
+                #     return
+                
+                # 全セッションを終了
+                if tmux_manager.kill_all_claude_sessions():
+                    # SessionManagerもクリア
+                    session_manager.clear_all_sessions()
+                    await loading_msg.edit(content="✅ 全てのClaude Codeセッションを終了しました")
+                else:
+                    await loading_msg.edit(content="⚠️ セッションの終了中にエラーが発生しました")
+                    
+            else:
+                # セッション番号を指定して終了
+                try:
+                    session_num = int(target)
+                except ValueError:
+                    await loading_msg.edit(content="❌ 無効なセッション番号です。数字を指定してください。")
+                    return
+                
+                # セッションの存在確認
+                if not tmux_manager.is_claude_session_exists(session_num):
+                    await loading_msg.edit(content=f"❌ セッション {session_num} は存在しません")
+                    return
+                
+                # tmuxセッションを終了
+                if tmux_manager.kill_claude_session(session_num):
+                    # SessionManagerから対応するthread_idを探して削除
+                    thread_id = session_manager.get_thread_by_session(session_num)
+                    if thread_id:
+                        session_manager.remove_session(thread_id)
+                    await loading_msg.edit(content=f"✅ セッション {session_num} を終了しました")
+                else:
+                    await loading_msg.edit(content=f"⚠️ セッション {session_num} の終了に失敗しました")
+                    
+        except Exception as e:
+            logger.error(f"Error in stop command: {e}")
+            await loading_msg.edit(content=f"❌ エラーが発生しました: {str(e)[:100]}")
 
 def run_bot():
     """

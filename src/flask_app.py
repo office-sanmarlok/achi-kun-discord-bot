@@ -58,7 +58,7 @@ class TmuxMessageForwarder:
     """
     
     # 設定可能な定数（将来は設定ファイル化）
-    TMUX_DELAY_SECONDS = 0.2
+    TMUX_DELAY_SECONDS = 0.5  # 0.2から0.5に延長して確実にEnterキーを送信
     SESSION_NAME_PREFIX = "claude-session"
     
     @classmethod
