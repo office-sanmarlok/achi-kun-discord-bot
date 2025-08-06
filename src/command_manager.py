@@ -12,6 +12,8 @@ Command Manager - !completeコマンドのワークフロー管理
 import asyncio
 import subprocess
 import logging
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional
 import discord
@@ -402,6 +404,12 @@ class CommandManager:
                 )
                 return None, None
             
+            # GitHub Secretsの設定
+            await loading_msg.edit(content="`...` GitHub Secretsを設定中...")
+            secrets_success = await self._setup_github_secrets(thread_name, dev_path)
+            if not secrets_success:
+                logger.warning("Failed to set GitHub secrets, but continuing with repository setup")
+            
             # 現在のブランチ名を取得
             success, branch_name = await self.bot.project_manager.execute_git_command(
                 dev_path, ["git", "branch", "--show-current"]
@@ -652,6 +660,61 @@ class CommandManager:
         if success:
             return output.strip()
         return "unknown"
+
+    async def _setup_github_secrets(self, repo_name: str, dev_path: Path) -> bool:
+        """
+        GitHub SecretsにClaude Code OAuthトークンを設定
+        
+        Args:
+            repo_name: リポジトリ名
+            dev_path: 開発ディレクトリパス
+            
+        Returns:
+            bool: 成功した場合True、失敗した場合False
+        """
+        try:
+            # 1. credentials.jsonからOAuthトークンを取得
+            credentials_path = Path.home() / ".claude" / ".credentials.json"
+            if not credentials_path.exists():
+                logger.warning("Claude credentials file not found. Please login with 'claude login'")
+                return False
+            
+            with open(credentials_path, 'r') as f:
+                credentials = json.load(f)
+            
+            oauth_data = credentials.get('claudeAiOauth', {})
+            access_token = oauth_data.get('accessToken')
+            expires_at = oauth_data.get('expiresAt', 0)
+            
+            if not access_token:
+                logger.warning("OAuth access token not found in credentials")
+                return False
+            
+            # 2. トークンの有効期限をチェック
+            if expires_at:
+                expiry_date = datetime.fromtimestamp(expires_at / 1000)
+                if datetime.now() > expiry_date:
+                    logger.warning(f"OAuth token expired at {expiry_date}. Please re-login with 'claude login'")
+                    return False
+                logger.info(f"OAuth token valid until {expiry_date}")
+            
+            # 3. gh secretコマンドで設定
+            github_user = await self._get_github_user()
+            cmd = ["gh", "secret", "set", "CLAUDE_CODE_OAUTH_TOKEN", 
+                   "-b", access_token, "-R", f"{github_user}/{repo_name}"]
+            
+            success, output = await async_run(cmd, cwd=str(dev_path))
+            
+            if success:
+                logger.info(f"GitHub Secret CLAUDE_CODE_OAUTH_TOKEN set for {repo_name}")
+                return True
+            else:
+                logger.error(f"Failed to set GitHub Secret: {output}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error setting GitHub secrets: {e}")
+            return False
     
     async def _check_git_remote(self, repo_path: Path) -> bool:
         """Gitリモートが設定されているか確認"""
