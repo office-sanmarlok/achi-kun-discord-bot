@@ -118,8 +118,6 @@ class ClaudeCLIBot(commands.Bot):
     # 設定可能な定数（将来は設定ファイル化）
     CLEANUP_INTERVAL_HOURS = 6
     REQUEST_TIMEOUT_SECONDS = 5
-    LOADING_MESSAGE = "`...`"
-    SUCCESS_MESSAGE = "> メッセージを送信完了しました"
     
     def __init__(self, settings_manager: SettingsManager):
         """
@@ -256,21 +254,18 @@ class ClaudeCLIBot(commands.Bot):
             await self._start_claude_session(session_num, message.channel.name)
             logger.info(f"Created session {session_num} for existing thread {thread_id}")
         
-        # ユーザーフィードバック（即座のローディング表示）
-        loading_msg = await self._send_loading_feedback(message.channel)
-        if not loading_msg:
-            return
-        
         try:
             # メッセージ処理パイプライン
             result_text = await self._process_message_pipeline(message, session_num)
             
+            # エラーがあった場合のみ表示
+            if result_text:
+                await message.channel.send(result_text)
+                
         except Exception as e:
-            result_text = f"❌ 処理エラー: {str(e)[:100]}"
+            error_text = f"❌ 処理エラー: {str(e)[:100]}"
             logger.error(f"Message processing error: {e}", exc_info=True)
-        
-        # 最終結果の表示
-        await self._update_feedback(loading_msg, result_text)
+            await message.channel.send(error_text)
         
     async def _validate_message(self, message) -> bool:
         """
@@ -290,20 +285,7 @@ class ClaudeCLIBot(commands.Bot):
         
         return True
         
-    async def _send_loading_feedback(self, channel) -> Optional[discord.Message]:
-        """
-        ローディングフィードバックの送信
-        
-        拡張ポイント：
-        - カスタムローディングメッセージ
-        - アニメーション表示
-        - プログレスバー
-        """
-        try:
-            return await channel.send(self.LOADING_MESSAGE)
-        except Exception as e:
-            logger.error(f'フィードバック送信エラー: {e}')
-            return None
+
             
     async def _process_message_pipeline(self, message, session_num: int) -> str:
         """
@@ -389,23 +371,11 @@ class ClaudeCLIBot(commands.Bot):
         - カスタムメッセージ
         """
         if status_code == 200:
-            return self.SUCCESS_MESSAGE
+            return None  # 成功時は何も表示しない
         else:
             return f"⚠️ ステータス: {status_code}"
             
-    async def _update_feedback(self, loading_msg: discord.Message, result_text: str):
-        """
-        フィードバックメッセージの更新
-        
-        拡張ポイント：
-        - リッチメッセージ表示
-        - 進捗状況の表示
-        - インタラクティブ要素
-        """
-        try:
-            await loading_msg.edit(content=result_text)
-        except Exception as e:
-            logger.error(f'メッセージ更新失敗: {e}')
+
     
     def should_forward_to_claude(self, message: discord.Message) -> bool:
         """
