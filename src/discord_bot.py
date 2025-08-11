@@ -94,13 +94,8 @@ class MessageProcessor:
             attachment_parts = [f"[添付画像のファイルパス: {path}]" for path in attachment_paths]
             attachment_str = " " + " ".join(attachment_parts)
         
-        # メッセージタイプによる分岐処理
-        if content.startswith('/'):
-            # スラッシュコマンド形式（直接Claude Codeコマンド実行）
-            return f"{content}{attachment_str} session={session_num}"
-        else:
-            # 通常メッセージ形式（Claude Codeへの通知）
-            return f"Discordからの通知: {content}{attachment_str} session={session_num}"
+        # メッセージにファイルパスを追加して返す
+        return f"{content}{attachment_str}"
 
 class ClaudeCLIBot(commands.Bot):
     """
@@ -123,8 +118,6 @@ class ClaudeCLIBot(commands.Bot):
     # 設定可能な定数（将来は設定ファイル化）
     CLEANUP_INTERVAL_HOURS = 6
     REQUEST_TIMEOUT_SECONDS = 5
-    LOADING_MESSAGE = "`...`"
-    SUCCESS_MESSAGE = "> メッセージを送信完了しました"
     
     def __init__(self, settings_manager: SettingsManager):
         """
@@ -261,21 +254,18 @@ class ClaudeCLIBot(commands.Bot):
             await self._start_claude_session(session_num, message.channel.name)
             logger.info(f"Created session {session_num} for existing thread {thread_id}")
         
-        # ユーザーフィードバック（即座のローディング表示）
-        loading_msg = await self._send_loading_feedback(message.channel)
-        if not loading_msg:
-            return
-        
         try:
             # メッセージ処理パイプライン
             result_text = await self._process_message_pipeline(message, session_num)
             
+            # エラーがあった場合のみ表示
+            if result_text:
+                await message.channel.send(result_text)
+                
         except Exception as e:
-            result_text = f"❌ 処理エラー: {str(e)[:100]}"
+            error_text = f"❌ 処理エラー: {str(e)[:100]}"
             logger.error(f"Message processing error: {e}", exc_info=True)
-        
-        # 最終結果の表示
-        await self._update_feedback(loading_msg, result_text)
+            await message.channel.send(error_text)
         
     async def _validate_message(self, message) -> bool:
         """
@@ -295,20 +285,7 @@ class ClaudeCLIBot(commands.Bot):
         
         return True
         
-    async def _send_loading_feedback(self, channel) -> Optional[discord.Message]:
-        """
-        ローディングフィードバックの送信
-        
-        拡張ポイント：
-        - カスタムローディングメッセージ
-        - アニメーション表示
-        - プログレスバー
-        """
-        try:
-            return await channel.send(self.LOADING_MESSAGE)
-        except Exception as e:
-            logger.error(f'フィードバック送信エラー: {e}')
-            return None
+
             
     async def _process_message_pipeline(self, message, session_num: int) -> str:
         """
@@ -394,23 +371,11 @@ class ClaudeCLIBot(commands.Bot):
         - カスタムメッセージ
         """
         if status_code == 200:
-            return self.SUCCESS_MESSAGE
+            return None  # 成功時は何も表示しない
         else:
             return f"⚠️ ステータス: {status_code}"
             
-    async def _update_feedback(self, loading_msg: discord.Message, result_text: str):
-        """
-        フィードバックメッセージの更新
-        
-        拡張ポイント：
-        - リッチメッセージ表示
-        - 進捗状況の表示
-        - インタラクティブ要素
-        """
-        try:
-            await loading_msg.edit(content=result_text)
-        except Exception as e:
-            logger.error(f'メッセージ更新失敗: {e}')
+
     
     def should_forward_to_claude(self, message: discord.Message) -> bool:
         """
@@ -448,8 +413,8 @@ class ClaudeCLIBot(commands.Bot):
             work_dir = self.settings.get_claude_work_dir()
         claude_options = self.settings.get_claude_options()
         
-        # claudeコマンドを構築
-        claude_cmd = f"cd {work_dir} && claude {claude_options}".strip()
+        # claudeコマンドを構築（ロケール設定を追加）
+        claude_cmd = f"export LANG=C.UTF-8 && export LC_ALL=C.UTF-8 && cd {work_dir} && claude {claude_options}".strip()
         cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         
         try:
@@ -589,27 +554,31 @@ class ClaudeCLIBot(commands.Bot):
             # Claude Codeセッションを開始（project-wslディレクトリで）
             await self._start_claude_session(session_num, thread.name, working_dir)
             
-            # 少し待ってからプロンプトを送信
-            await asyncio.sleep(3)
+            # Claude Codeの起動完了を待ってからプロンプトを送信
+            await asyncio.sleep(8)  # 3秒から8秒に延長
             
-            # 初期コンテキストとプロンプトを送信
-            initial_context = {
+            # プロンプトを生成（thread_infoとsession_numを渡す）
+            thread_info = {
                 'channel_name': parent_message.channel.name,
-                'parent_message': {
-                    'author': parent_message.author.name,
-                    'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'content': parent_message.content
-                }
+                'thread_name': thread.name,
+                'thread_id': str(thread.id),
+                'author': parent_message.author.name,
+                'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                'parent_content': parent_message.content
             }
             
-            prompt = self.context_manager.generate_idea_prompt(idea_name, parent_message.content)
+            prompt = self.context_manager.generate_idea_prompt(
+                idea_name, 
+                parent_message.content,
+                thread_info=thread_info,
+                session_num=session_num
+            )
             
-            success, msg = await self.prompt_sender.send_initial_context_and_prompt(
+            # Flask経由でプロンプトを送信（プロンプトには既にコンテキストが含まれている）
+            success, msg = await self.prompt_sender.send_prompt(
                 session_num=session_num,
-                thread_id=str(thread.id),
-                thread_name=thread.name,
-                initial_context=initial_context,
-                prompt=prompt
+                prompt=prompt,
+                thread_id=str(thread.id)
             )
             
             if not success:
@@ -733,30 +702,53 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
                 working_directory=bot.settings.get_claude_work_dir()
             )
             
-            # 少し待ってから初期コンテキストを送信
-            await asyncio.sleep(3)
+            # Claude Codeの起動完了を待ってから初期コンテキストを送信
+            await asyncio.sleep(8)  # 3秒から8秒に延長
             
-            # 初期コンテキストを送信
-            initial_context = {
-                'channel_name': parent_message.channel.name,
-                'parent_message': {
+            # テンプレートローダーを使ってコンテキストとプロンプトを生成
+            from src.claude_context_manager import PromptTemplateLoader
+            template_loader = PromptTemplateLoader()
+            
+            # cc.mdとcontext_base.mdを結合
+            template_content = template_loader.load_and_combine_templates("cc.md")
+            
+            if template_content:
+                # 変数を準備
+                variables = {
+                    'channel_name': parent_message.channel.name,
+                    'thread_name': thread.name,
+                    'thread_id': str(thread.id),
+                    'session_num': session_num,
                     'author': parent_message.author.name,
                     'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'content': parent_message.content
+                    'parent_content': parent_message.content
                 }
-            }
-            
-            # 初期コンテキストのみ送信（プロンプトなし）
-            context_message = bot.prompt_sender.build_initial_context(
-                session_num=session_num,
-                thread_id=str(thread.id),
-                thread_name=thread.name,
-                initial_context=initial_context
-            )
+                
+                # テンプレート変数を置換
+                prompt = template_loader.render_template(template_content, variables)
+            else:
+                # フォールバック（テンプレートが見つからない場合）
+                prompt = f"""=== Discord スレッド情報 ===
+チャンネル名: {parent_message.channel.name}
+スレッド名: {thread.name}
+スレッドID: {thread.id}
+セッション番号: {session_num}
+
+【重要】このセッションはDiscordのスレッド専用です。
+メッセージ送信は: dp {session_num} "メッセージ"
+
+=== 親メッセージ ===
+作成者: {parent_message.author.name}
+時刻: {parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+内容:
+{parent_message.content}
+===================
+
+このスレッドでメッセージを送信すると、Claude Codeに転送されます。"""
             
             success, msg = await bot.prompt_sender.send_prompt(
                 session_num=session_num,
-                prompt=context_message,
+                prompt=prompt,
                 thread_id=str(thread.id)
             )
             
@@ -808,6 +800,87 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         ※ #1-idea, #2-requirements, #3-design, #4-tasksのスレッド内で実行
         """
         await bot.command_manager.process_complete_command(ctx)
+    
+    @bot.command(name='stop')
+    async def stop_command(ctx, target: str = None):
+        """tmuxセッションを終了するコマンド
+        
+        使用方法:
+        - !stop             : 現在のスレッドのセッションを終了
+        - !stop <番号>      : 指定したセッション番号を終了
+        - !stop all         : 全てのセッションを終了（管理者のみ）
+        """
+        from src.tmux_manager import TmuxManager
+        from src.session_manager import get_session_manager
+        
+        tmux_manager = TmuxManager()
+        session_manager = get_session_manager()
+        
+        # スレッド内での実行チェック
+        if target is None and ctx.channel.type != discord.ChannelType.public_thread:
+            await ctx.send("❌ このチャンネルでは`!stop`を使用できません。スレッド内で実行するか、セッション番号を指定してください。")
+            return
+        
+        loading_msg = await ctx.send("`...` セッション終了処理中...")
+        
+        try:
+            if target is None:
+                # 現在のスレッドのセッションを終了
+                thread_id = str(ctx.channel.id)
+                session_num = session_manager.get_session(thread_id)
+                
+                if session_num is None:
+                    await loading_msg.edit(content="❌ このスレッドにはアクティブなセッションがありません")
+                    return
+                
+                # tmuxセッションを終了
+                if tmux_manager.kill_claude_session(session_num):
+                    # SessionManagerからも削除
+                    session_manager.remove_session(thread_id)
+                    await loading_msg.edit(content=f"✅ セッション {session_num} を終了しました")
+                else:
+                    await loading_msg.edit(content=f"⚠️ セッション {session_num} の終了に失敗しました")
+                    
+            elif target.lower() == "all":
+                # 管理者権限チェック（必要に応じて）
+                # if not ctx.author.guild_permissions.administrator:
+                #     await loading_msg.edit(content="❌ 全セッション終了には管理者権限が必要です")
+                #     return
+                
+                # 全セッションを終了
+                if tmux_manager.kill_all_claude_sessions():
+                    # SessionManagerもクリア
+                    session_manager.clear_all_sessions()
+                    await loading_msg.edit(content="✅ 全てのClaude Codeセッションを終了しました")
+                else:
+                    await loading_msg.edit(content="⚠️ セッションの終了中にエラーが発生しました")
+                    
+            else:
+                # セッション番号を指定して終了
+                try:
+                    session_num = int(target)
+                except ValueError:
+                    await loading_msg.edit(content="❌ 無効なセッション番号です。数字を指定してください。")
+                    return
+                
+                # セッションの存在確認
+                if not tmux_manager.is_claude_session_exists(session_num):
+                    await loading_msg.edit(content=f"❌ セッション {session_num} は存在しません")
+                    return
+                
+                # tmuxセッションを終了
+                if tmux_manager.kill_claude_session(session_num):
+                    # SessionManagerから対応するthread_idを探して削除
+                    thread_id = session_manager.get_thread_by_session(session_num)
+                    if thread_id:
+                        session_manager.remove_session(thread_id)
+                    await loading_msg.edit(content=f"✅ セッション {session_num} を終了しました")
+                else:
+                    await loading_msg.edit(content=f"⚠️ セッション {session_num} の終了に失敗しました")
+                    
+        except Exception as e:
+            logger.error(f"Error in stop command: {e}")
+            await loading_msg.edit(content=f"❌ エラーが発生しました: {str(e)[:100]}")
 
 def run_bot():
     """

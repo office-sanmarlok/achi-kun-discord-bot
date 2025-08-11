@@ -189,37 +189,14 @@ class ClaudeContextManager:
         Returns:
             idea.md生成用プロンプト
         """
-        # context_base.mdとidea.mdを結合して読み込み
-        template_content = self.template_loader.load_and_combine_templates("idea.md")
-        
-        if template_content:
-            # テンプレートが存在する場合は変数を置換
-            variables = {
-                'idea_name': idea_name,
-                'parent_content': parent_content,
-                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
-                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
-                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
-                'session_num': session_num if session_num else '',
-                'author': thread_info.get('author', '') if thread_info else '',
-                'created_at': thread_info.get('created_at', '') if thread_info else ''
-            }
-            return self.template_loader.render_template(template_content, variables)
-        else:
-            # テンプレートが存在しない場合はデフォルトを使用
-            prompt = f"""親メッセージの内容をもとに、./projects/{idea_name}/idea.mdに企画提案書を記載してください。
-
-親メッセージ:
-{parent_content}
-
-以下の要素を含めて、マークダウン形式で記載してください：
-- プロジェクトの概要
-- 解決したい課題
-- 提案する解決策
-- 期待される効果
-- 実装の概要（技術的な観点）"""
-            
-            return prompt
+        # 統一メソッドを使用
+        return self.generate_prompt(
+            stage='idea',
+            idea_name=idea_name,
+            parent_content=parent_content,
+            thread_info=thread_info,
+            session_num=session_num
+        )
     
     def generate_requirements_prompt(self, idea_name: str,
                                     thread_info: Dict[str, str] = None,
@@ -233,8 +210,99 @@ class ClaudeContextManager:
         Returns:
             requirements.md生成用プロンプト
         """
-        # context_base.mdとcomplete/requirements.mdを結合して読み込み
-        template_content = self.template_loader.load_and_combine_templates("complete/requirements.md")
+        # 統一メソッドを使用
+        return self.generate_prompt(
+            stage='requirements',
+            idea_name=idea_name,
+            thread_info=thread_info,
+            session_num=session_num
+        )
+    
+    def generate_design_prompt(self, idea_name: str,
+                              thread_info: Dict[str, str] = None,
+                              session_num: int = None) -> str:
+        """
+        design.md生成用プロンプトを生成（SDD.md参照）
+        
+        Args:
+            idea_name: アイデア名
+            
+        Returns:
+            design.md生成用プロンプト
+        """
+        # 統一メソッドを使用
+        return self.generate_prompt(
+            stage='design',
+            idea_name=idea_name,
+            thread_info=thread_info,
+            session_num=session_num
+        )
+    
+    def generate_tasks_prompt(self, idea_name: str,
+                            thread_info: Dict[str, str] = None,
+                            session_num: int = None) -> str:
+        """
+        tasks.md生成用プロンプトを生成（SDD.md参照）
+        
+        Args:
+            idea_name: アイデア名
+            
+        Returns:
+            tasks.md生成用プロンプト
+        """
+        # 統一メソッドを使用
+        return self.generate_prompt(
+            stage='tasks',
+            idea_name=idea_name,
+            thread_info=thread_info,
+            session_num=session_num
+        )
+    
+    def generate_development_prompt(self, idea_name: str,
+                                   thread_info: Dict[str, str] = None,
+                                   session_num: int = None) -> str:
+        """
+        開発開始用プロンプトを生成
+        
+        Args:
+            idea_name: アイデア名
+            
+        Returns:
+            開発開始用プロンプト
+        """
+        # 統一メソッドを使用
+        return self.generate_prompt(
+            stage='development',
+            idea_name=idea_name,
+            thread_info=thread_info,
+            session_num=session_num
+        )
+    
+    def _generate_prompt_base(self, 
+                             template_path: str,
+                             idea_name: str,
+                             stage: str,
+                             thread_info: Dict[str, str] = None,
+                             session_num: int = None,
+                             parent_content: str = None,
+                             default_prompt: str = None) -> str:
+        """
+        プロンプト生成の共通ロジック
+        
+        Args:
+            template_path: テンプレートファイルのパス
+            idea_name: アイデア名
+            stage: ステージ名（idea, requirements, design, tasks, development）
+            thread_info: スレッド情報
+            session_num: セッション番号
+            parent_content: 親メッセージの内容（ideaステージ用）
+            default_prompt: テンプレートが存在しない場合のデフォルトプロンプト
+            
+        Returns:
+            生成されたプロンプト
+        """
+        # テンプレートをロード
+        template_content = self.template_loader.load_and_combine_templates(template_path)
         
         if template_content:
             # テンプレートが存在する場合は変数を置換
@@ -247,12 +315,45 @@ class ClaudeContextManager:
                 'session_num': session_num if session_num else '',
                 'author': thread_info.get('author', '') if thread_info else '',
                 'created_at': thread_info.get('created_at', '') if thread_info else '',
-                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
+                'parent_content': parent_content if parent_content else thread_info.get('parent_content', '') if thread_info else ''
             }
             return self.template_loader.render_template(template_content, variables)
         else:
             # テンプレートが存在しない場合はデフォルトを使用
-            prompt = f"""./projects/{idea_name}/idea.mdを読んで、{self.sdd_path}のRequirement Gatheringセクションに従って./projects/{idea_name}/requirements.mdに要件定義を記載してください.
+            return default_prompt if default_prompt else f"No template found for {stage} stage"
+    
+    def generate_prompt(self, stage: str, idea_name: str, **kwargs) -> str:
+        """
+        統一インターフェースでプロンプトを生成
+        
+        Args:
+            stage: ステージ名（idea, requirements, design, tasks, development）
+            idea_name: アイデア名
+            **kwargs: その他のオプション引数（thread_info, session_num, parent_content等）
+            
+        Returns:
+            生成されたプロンプト
+        """
+        # ステージ別の設定を取得
+        stage_configs = {
+            'idea': {
+                'template_path': 'idea.md',
+                'requires_parent_content': True,
+                'default_prompt': f"""親メッセージの内容をもとに、./projects/{idea_name}/idea.mdに企画提案書を記載してください。
+
+親メッセージ:
+{kwargs.get('parent_content', '')}
+
+以下の要素を含めて、マークダウン形式で記載してください：
+- プロジェクトの概要
+- 解決したい課題
+- 提案する解決策
+- 期待される効果
+- 実装の概要（技術的な観点）"""
+            },
+            'requirements': {
+                'template_path': 'complete/requirements.md',
+                'default_prompt': f"""./projects/{idea_name}/idea.mdを読んで、{self.sdd_path}のRequirement Gatheringセクションに従って./projects/{idea_name}/requirements.mdに要件定義を記載してください.
 
 具体的には以下の形式で記載してください：
 
@@ -268,179 +369,56 @@ class ClaudeContextManager:
        - IF [precondition] THEN [system] SHALL [response]
 
 エッジケース、ユーザー体験、技術的制約、成功基準を考慮して、包括的な要件を定義してください。"""
-        
-        return prompt
-    
-    def generate_design_prompt(self, idea_name: str,
-                              thread_info: Dict[str, str] = None,
-                              session_num: int = None) -> str:
-        """
-        design.md生成用プロンプトを生成（SDD.md参照）
-        
-        Args:
-            idea_name: アイデア名
-            
-        Returns:
-            design.md生成用プロンプト
-        """
-        # context_base.mdとcomplete/design.mdを結合して読み込み
-        template_content = self.template_loader.load_and_combine_templates("complete/design.md")
-        
-        if template_content:
-            # テンプレートが存在する場合は変数を置換
-            variables = {
-                'idea_name': idea_name,
-                'sdd_path': str(self.sdd_path),
-                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
-                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
-                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
-                'session_num': session_num if session_num else '',
-                'author': thread_info.get('author', '') if thread_info else '',
-                'created_at': thread_info.get('created_at', '') if thread_info else '',
-                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
+            },
+            'design': {
+                'template_path': 'complete/design.md',
+                'default_prompt': f"""./projects/{idea_name}/requirements.mdを読んで、{self.sdd_path}のDesignセクションに従って./projects/{idea_name}/design.mdに設計書を記載してください。
+
+具体的には以下のセクションを含めてください：
+- Overview: 設計の概要
+- Architecture: システムアーキテクチャ
+- Components and Interfaces: コンポーネントとインターフェース
+- Data Models: データモデル
+- Error Handling: エラーハンドリング
+- Testing Strategy: テスト戦略
+
+必要に応じてMermaidダイアグラムを使用してください。"""
+            },
+            'tasks': {
+                'template_path': 'complete/tasks.md',
+                'default_prompt': f"""./projects/{idea_name}/design.mdを読んで、{self.sdd_path}のTask Listセクションに従って./projects/{idea_name}/tasks.mdに実装タスクリストを記載してください。
+
+具体的には以下の形式で記載してください：
+- タスクをチェックボックスリスト形式で作成
+- 各タスクは具体的で実行可能なコーディングタスク
+- タスクは段階的に実装できるよう順序立てる
+- 各タスクに要件への参照を含める"""
+            },
+            'development': {
+                'template_path': 'complete/development.md',
+                'default_prompt': f"""./projects/{idea_name}/tasks.mdのタスクリストに従って開発を進めてください。
+
+作業ディレクトリ: ./development/{idea_name}/
+
+タスクを順番に実装し、テスト駆動開発のアプローチを採用してください。"""
             }
-            return self.template_loader.render_template(template_content, variables)
-        else:
-            # テンプレートが存在しない場合はデフォルトを使用
-            prompt = f"""./projects/{idea_name}/requirements.mdを読んで、{self.sdd_path}のCreate Feature Design Documentセクションに従って./projects/{idea_name}/design.mdに設計書を記載してください。
-
-設計書には以下のセクションを含めてください：
-
-1. Overview
-   - システムアーキテクチャの概要
-
-2. Architecture
-   - システム全体の構成
-   - 主要コンポーネント間の関係
-   - データフローの説明
-
-3. Components and Interfaces
-   - 各コンポーネントの詳細設計
-   - インターフェース定義
-   - API仕様
-
-4. Data Models
-   - データ構造の定義
-   - データベーススキーマ（該当する場合）
-
-5. Error Handling
-   - エラー処理戦略
-   - 例外処理の方針
-
-6. Testing Strategy
-   - テスト方針
-   - テストケースの概要
-
-必要に応じてMermaid形式の図を含めてください。
-全ての要件がどのように実現されるかを明確に示してください。"""
+        }
         
-        return prompt
-    
-    def generate_tasks_prompt(self, idea_name: str,
-                            thread_info: Dict[str, str] = None,
-                            session_num: int = None) -> str:
-        """
-        tasks.md生成用プロンプトを生成（SDD.md参照）
+        config = stage_configs.get(stage, {})
         
-        Args:
-            idea_name: アイデア名
-            
-        Returns:
-            tasks.md生成用プロンプト
-        """
-        # context_base.mdとcomplete/tasks.mdを結合して読み込み
-        template_content = self.template_loader.load_and_combine_templates("complete/tasks.md")
+        # ステージ別の処理
+        if stage == 'idea' and config.get('requires_parent_content') and 'parent_content' not in kwargs:
+            raise ValueError("parent_content is required for idea stage")
         
-        if template_content:
-            # テンプレートが存在する場合は変数を置換
-            variables = {
-                'idea_name': idea_name,
-                'sdd_path': str(self.sdd_path),
-                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
-                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
-                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
-                'session_num': session_num if session_num else '',
-                'author': thread_info.get('author', '') if thread_info else '',
-                'created_at': thread_info.get('created_at', '') if thread_info else '',
-                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
-            }
-            return self.template_loader.render_template(template_content, variables)
-        else:
-            # テンプレートが存在しない場合はデフォルトを使用
-            prompt = f"""./projects/{idea_name}/design.mdを読んで、{self.sdd_path}のCreate Task Listセクションに従って./projects/{idea_name}/tasks.mdに実装タスクリストを記載してください。
-
-以下の指示に従ってタスクリストを作成してください：
-
-1. 設計を一連のコーディングタスクに変換
-2. テスト駆動開発を優先
-3. 段階的な進行を確保（複雑さの大きな飛躍を避ける）
-4. 各タスクが前のタスクに基づいて構築されるようにする
-5. 最後は統合作業で終わる
-6. 孤立したコードがないようにする
-
-フォーマット：
-- 番号付きチェックボックスリスト（最大2階層）
-- 各タスクには明確な目標を記載
-- サブ情報は箇条書きで追加
-- 要件ドキュメントの具体的な要件番号を参照（_Requirements: X.X_ 形式）
-
-コーディングタスクのみを含め、以下は除外：
-- ユーザーテスト
-- デプロイメント
-- パフォーマンス測定
-- ドキュメント作成（コード内コメントは除く）
-
-例：
-- [ ] 1. プロジェクト構造とコアインターフェースの設定
-  - ディレクトリ構造の作成
-  - インターフェース定義
-  - _Requirements: 1.1_"""
-        
-        return prompt
-    
-    def generate_development_prompt(self, idea_name: str,
-                                   thread_info: Dict[str, str] = None,
-                                   session_num: int = None) -> str:
-        """
-        開発開始用プロンプトを生成
-        
-        Args:
-            idea_name: アイデア名
-            
-        Returns:
-            開発開始用プロンプト
-        """
-        # context_base.mdとcomplete/development.mdを結合して読み込み
-        template_content = self.template_loader.load_and_combine_templates("complete/development.md")
-        
-        if template_content:
-            # テンプレートが存在する場合は変数を置換
-            variables = {
-                'idea_name': idea_name,
-                'channel_name': thread_info.get('channel_name', '') if thread_info else '',
-                'thread_name': thread_info.get('thread_name', '') if thread_info else '',
-                'thread_id': thread_info.get('thread_id', '') if thread_info else '',
-                'session_num': session_num if session_num else '',
-                'author': thread_info.get('author', '') if thread_info else '',
-                'created_at': thread_info.get('created_at', '') if thread_info else '',
-                'parent_content': thread_info.get('parent_content', '') if thread_info else ''
-            }
-            return self.template_loader.render_template(template_content, variables)
-        else:
-            # テンプレートが存在しない場合はデフォルトを使用
-            prompt = f"""./projects/{idea_name}/tasks.mdのタスクリストに従って、v0の開発を開始してください。
-
-タスクリストの順番に従って実装を進め、各タスクが完了したら該当するチェックボックスを埋めてください。
-
-開発にあたって：
-1. テスト駆動開発を心がける
-2. コミットは適切な粒度で行う
-3. エラーハンドリングを適切に実装する
-4. コードの可読性を重視する
-
-最初のタスクから開始してください。"""
-            
-            return prompt
+        return self._generate_prompt_base(
+            template_path=config.get('template_path', f'{stage}.md'),
+            idea_name=idea_name,
+            stage=stage,
+            thread_info=kwargs.get('thread_info'),
+            session_num=kwargs.get('session_num'),
+            parent_content=kwargs.get('parent_content'),
+            default_prompt=config.get('default_prompt')
+        )
     
     def format_complete_message(self, stage: str, idea_name: str) -> str:
         """

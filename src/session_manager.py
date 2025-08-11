@@ -158,6 +158,22 @@ class SessionManager:
         self.thread_sessions.clear()
         self.next_session_num = 1
         logger.info("All sessions cleared")
+    
+    def clear_all_sessions(self):
+        """全セッションをクリア（clear_allのエイリアス）"""
+        self.clear_all()
+    
+    def get_thread_by_session(self, session_num: int) -> Optional[str]:
+        """
+        セッション番号からスレッドIDを取得（find_thread_by_sessionのエイリアス）
+        
+        Args:
+            session_num: セッション番号
+            
+        Returns:
+            スレッドID、存在しない場合はNone
+        """
+        return self.find_thread_by_session(session_num)
         
     def get_stats(self) -> Dict[str, any]:
         """統計情報を取得"""

@@ -11,12 +11,11 @@ Project Manager - プロジェクトディレクトリとファイル管理
 
 import os
 import shutil
-import asyncio
-import subprocess
 import logging
 from pathlib import Path
 from typing import Optional, Tuple, List
 from datetime import datetime
+from lib.command_executor import execute_git_command as exec_git_cmd, async_run
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +36,17 @@ class ProjectManager:
         
         # 環境変数から設定
         self.project_wsl_root = Path(project_root)
-        self.bot_dir = self.project_wsl_root / "akd-sdd"
+        
+        # ディレクトリの設定
         self.achi_kun_root = self.project_wsl_root  # 開発用ディレクトリ（project-wslそのもの）
         self.projects_dir = self.project_wsl_root / "projects"  # ドキュメント用ディレクトリ
         self.projects_root = self.projects_dir  # エイリアスを追加
         
+        # GitHub workflowテンプレートのパス
+        self.workflow_templates_dir = self.project_wsl_root / "github-workflow-templates" / ".github"
+        
         logger.info(f"ProjectManager initialized - projects: {self.projects_dir}, achi-kun: {self.achi_kun_root}")
+    
     
     def create_project_structure(self, idea_name: str) -> Path:
         """
@@ -141,22 +145,24 @@ class ProjectManager:
     
     def copy_github_workflows(self, idea_name: str) -> None:
         """
-        GitHub Actionsワークフローをコピー
+        GitHub Actionsワークフローテンプレートをコピー
         
         Args:
             idea_name: プロジェクト名
             
         Raises:
-            FileNotFoundError: ソースまたはターゲットが見つからない場合
+            FileNotFoundError: テンプレートまたはターゲットが見つからない場合
         """
         # ソースとターゲットのパス
-        source_workflows = self.bot_dir / ".github"
+        source_workflows = self.workflow_templates_dir
         target_dir = self.achi_kun_root / idea_name
         target_workflows = target_dir / ".github"
         
-        # ソースの存在確認
+        # テンプレートの存在確認
         if not source_workflows.exists():
-            raise FileNotFoundError(f"ワークフローディレクトリが見つかりません: {source_workflows}")
+            logger.warning(f"ワークフローテンプレートが見つかりません: {source_workflows}")
+            logger.info("テンプレートなしで続行します")
+            return
         
         # ターゲットディレクトリの存在確認
         if not target_dir.exists():
@@ -168,7 +174,7 @@ class ProjectManager:
         
         # コピー実行
         shutil.copytree(source_workflows, target_workflows)
-        logger.info(f"Copied GitHub workflows: {source_workflows} -> {target_workflows}")
+        logger.info(f"Copied GitHub workflow templates: {source_workflows} -> {target_workflows}")
     
     async def init_git_repository(self, path: Path) -> Tuple[bool, str]:
         """
@@ -182,7 +188,7 @@ class ProjectManager:
         """
         try:
             # git initコマンドを実行
-            result = await self._run_command(["git", "init"], cwd=str(path))
+            result = await async_run(["git", "init"], cwd=str(path))
             
             if result[0]:
                 logger.info(f"Initialized git repository: {path}")
@@ -207,58 +213,13 @@ class ProjectManager:
         Returns:
             (成功フラグ, 出力メッセージ)
         """
-        try:
-            logger.info(f"Executing git command: {' '.join(command)} in directory: {path}")
-            result = await self._run_command(command, cwd=str(path))
-            
-            if result[0]:
-                logger.info(f"Git command succeeded: {' '.join(command)} in {path}")
-            else:
-                logger.error(f"Git command failed: {' '.join(command)} in {path} - {result[1]}")
-            
-            return result
-            
-        except Exception as e:
-            error_msg = f"Gitコマンドエラー: {str(e)}"
-            logger.error(error_msg)
-            return False, error_msg
-    
-    async def _run_command(self, command: List[str], cwd: Optional[str] = None) -> Tuple[bool, str]:
-        """
-        非同期でコマンドを実行
+        # "git"コマンドが先頭にある場合は削除（exec_git_cmdが自動的に追加するため）
+        if command and command[0] == "git":
+            git_args = command[1:]
+        else:
+            git_args = command
         
-        Args:
-            command: 実行するコマンドのリスト
-            cwd: 作業ディレクトリ
-            
-        Returns:
-            (成功フラグ, 出力メッセージ)
-        """
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                cwd=cwd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                # 成功時：stdoutが空の場合は成功メッセージを返す
-                output = stdout.decode('utf-8').strip()
-                return True, output if output else "Command completed successfully"
-            else:
-                # エラー時：stderrが空の場合はstdoutも確認
-                error_output = stderr.decode('utf-8').strip()
-                if not error_output:
-                    error_output = stdout.decode('utf-8').strip()
-                if not error_output:
-                    error_output = f"Command failed with exit code {process.returncode}"
-                return False, error_output
-                
-        except Exception as e:
-            return False, str(e)
+        return await exec_git_cmd(path, git_args, verbose=True)
     
     def get_project_path(self, idea_name: str) -> Path:
         """プロジェクトディレクトリのパスを取得"""
