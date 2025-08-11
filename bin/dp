@@ -5,8 +5,9 @@
 #   dp <session_number> "message"   # セッション番号を指定してメッセージ送信
 #
 
-# Get toolkit root directory
-TOOLKIT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Get toolkit root directory (resolve symlinks)
+SCRIPT_PATH="$(readlink -f "$0")"
+TOOLKIT_ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 
 # Check arguments
 if [ $# -ne 2 ]; then

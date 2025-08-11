@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 # Add parent directory to path for imports
-toolkit_root = Path(__file__).parent.parent
+toolkit_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(toolkit_root))
 
 from src.tmux_manager import TmuxManager

@@ -145,7 +145,7 @@ class ProjectManager:
     
     def copy_github_workflows(self, idea_name: str) -> None:
         """
-        GitHub Actionsワークフローテンプレートをコピー
+        GitHub ActionsワークフローテンプレートとMCP設定をコピー
         
         Args:
             idea_name: プロジェクト名
@@ -155,6 +155,7 @@ class ProjectManager:
         """
         # ソースとターゲットのパス
         source_workflows = self.workflow_templates_dir
+        source_templates_dir = self.project_wsl_root / "github-workflow-templates"
         target_dir = self.achi_kun_root / idea_name
         target_workflows = target_dir / ".github"
         
@@ -172,9 +173,17 @@ class ProjectManager:
         if target_workflows.exists():
             shutil.rmtree(target_workflows)
         
-        # コピー実行
+        # .githubディレクトリをコピー
         shutil.copytree(source_workflows, target_workflows)
         logger.info(f"Copied GitHub workflow templates: {source_workflows} -> {target_workflows}")
+        
+        # .mcp.jsonファイルをコピー（context7とplaywrightの設定）
+        source_mcp = source_templates_dir / ".mcp.json"
+        target_mcp = target_dir / ".mcp.json"
+        
+        if source_mcp.exists():
+            shutil.copy2(source_mcp, target_mcp)
+            logger.info(f"Copied MCP settings: {source_mcp} -> {target_mcp}")
     
     async def init_git_repository(self, path: Path) -> Tuple[bool, str]:
         """

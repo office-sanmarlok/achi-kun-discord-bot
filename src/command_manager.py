@@ -13,6 +13,7 @@ import asyncio
 import subprocess
 import logging
 import json
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -78,6 +79,30 @@ class CommandManager:
             await handler(ctx)
         else:
             await ctx.send("❌ 処理可能なワークフローチャンネルが見つかりません")
+    
+    def _generate_online_explorer_link(self, project_path: str, is_file: bool = False) -> str:
+        """
+        Online Explorerのリンクを生成
+        
+        Args:
+            project_path: プロジェクトのフルパス（例: /home/ubuntu/projects/my-project）
+            is_file: ファイルへの直接リンクかどうか
+        
+        Returns:
+            Online ExplorerのURL
+        """
+        # /home/ubuntu/からの相対パスを取得
+        base_path = '/home/ubuntu/'
+        if project_path.startswith(base_path):
+            relative_path = project_path[len(base_path):]
+        else:
+            # すでに相対パスの場合
+            relative_path = project_path.lstrip('/')
+        
+        # URLエンコード（/を%2Fに変換）
+        encoded_path = urllib.parse.quote(relative_path, safe='')
+        
+        return f"http://3.15.213.192:3456/?path={encoded_path}"
     
     async def handle_idea_complete(self, ctx) -> None:
         """#1-ideaでの!complete処理"""
@@ -203,10 +228,18 @@ class CommandManager:
             # 現在のセッションを終了
             await self._terminate_current_session(ctx)
             
+            # Online Explorerリンクを生成（開発ディレクトリ用）
+            explorer_link = self._generate_online_explorer_link(str(dev_path))
+            
             await loading_msg.edit(
-                content=f"✅ tasks フェーズが完了しました！\n"
-                f"🚀 GitHubリポジトリ: {github_url}\n"
-                f"次フェーズ: {next_channel.mention}"
+                content=(
+                    f"✅ **tasks** フェーズが完了しました！\n"
+                    f"📂 プロジェクト: `{thread_name}`\n"
+                    f"📍 開発パス: `{dev_path}`\n"
+                    f"🚀 GitHubリポジトリ: {github_url}\n"
+                    f"🌐 ブラウザで確認: [Online Explorerで開く]({explorer_link})\n"
+                    f"➡️ 次フェーズ: {next_channel.mention}"
+                )
             )
             
         except Exception as e:
@@ -326,9 +359,18 @@ class CommandManager:
         # 現在のセッションを終了
         await self._terminate_current_session(ctx)
         
-        # 成功メッセージ
+        # Online Explorerリンクを生成
+        explorer_link = self._generate_online_explorer_link(str(project_path))
+        
+        # 成功メッセージ（Online Explorerリンクを含む）
         await loading_msg.edit(
-            content=f"✅ {current_stage} フェーズが完了しました！\n次フェーズ: {next_channel.mention}"
+            content=(
+                f"✅ **{current_stage}** フェーズが完了しました！\n"
+                f"📂 プロジェクト: `{thread_name}`\n"
+                f"📍 パス: `{project_path}`\n"
+                f"🌐 ブラウザで確認: [Online Explorerで開く]({explorer_link})\n"
+                f"➡️ 次フェーズ: {next_channel.mention}"
+            )
         )
         
         return True
@@ -364,6 +406,21 @@ class CommandManager:
             if not success:
                 await loading_msg.edit(content=f"❌ Git初期化エラー:\n```\n{output}\n```")
                 return None, None
+            
+            # Serena MCPをプロジェクトに追加
+            serena_cmd = [
+                "claude", "mcp", "add", "serena",
+                "--scope", "project",
+                "--", "uvx", "--from", "git+https://github.com/oraios/serena",
+                "serena", "start-mcp-server",
+                "--context", "ide-assistant",
+                "--project", str(dev_path)
+            ]
+            success, output = await async_run(serena_cmd, cwd=str(dev_path))
+            if success:
+                logger.info(f"Serena MCP configured for project: {dev_path}")
+            else:
+                logger.warning(f"Failed to configure Serena MCP: {output}")
             
             # GitHubリポジトリ作成
             create_repo_cmd = ["gh", "repo", "create", thread_name, "--public", "--source=.", "--remote=origin"]
@@ -558,10 +615,14 @@ class CommandManager:
             if not success:
                 logger.error(f"Failed to send prompt for {stage}: {msg}")
         
-        # スレッドに初期メッセージを投稿
+        # Online Explorerリンクを生成
+        explorer_link = self._generate_online_explorer_link(str(project_path))
+        
+        # スレッドに初期メッセージを投稿（Online Explorerリンクを含む）
         await thread.send(
             f"📝 Claude Code セッション #{session_num} を開始しました。\n"
-            f"📄 ファイル: `{doc_file}`\n\n"
+            f"📄 ファイル: `{doc_file}`\n"
+            f"🌐 ブラウザで確認: [Online Explorerで開く]({explorer_link})\n\n"
             f"{stage}ドキュメントを作成中..."
         )
     
@@ -599,9 +660,18 @@ class CommandManager:
         session_manager.update_project_stage(idea_name, "development")
         session_manager.add_thread_to_workflow(idea_name, "5-development", thread_id)
         
-        # Claude Codeセッションの開始（作業ディレクトリを指定、ロケール設定を追加）
+        # Claude Codeセッションの開始（.mcp.jsonがあれば自動的に使用）
         session_name = f"claude-session-{session_num}"
-        claude_cmd = f"export LANG=C.UTF-8 && export LC_ALL=C.UTF-8 && cd {working_dir} && claude {self.settings.get_claude_options()}".strip()
+        
+        # .mcp.jsonが存在する場合は--mcp-configオプションを追加
+        mcp_json_path = Path(working_dir) / ".mcp.json"
+        mcp_option = f"--mcp-config {mcp_json_path}" if mcp_json_path.exists() else ""
+        claude_options = self.settings.get_claude_options()
+        
+        if mcp_json_path.exists():
+            logger.info(f"Using MCP configuration: {mcp_json_path}")
+        
+        claude_cmd = f"export LANG=C.UTF-8 && export LC_ALL=C.UTF-8 && cd {working_dir} && claude {mcp_option} {claude_options}".strip()
         cmd = ['tmux', 'new-session', '-d', '-s', session_name, 'bash', '-c', claude_cmd]
         
         try:
@@ -645,12 +715,16 @@ class CommandManager:
         if not success:
             logger.error(f"Failed to send development prompt: {msg}")
         
-        # スレッドに初期メッセージを投稿
+        # Online Explorerリンクを生成
+        explorer_link = self._generate_online_explorer_link(working_dir)
+        
+        # スレッドに初期メッセージを投稿（Online Explorerリンクを含む）
         await thread.send(
             f"🚀 開発フェーズを開始しました！\n"
             f"📝 Claude Code セッション #{session_num}\n"
             f"📁 作業ディレクトリ: `{working_dir}`\n"
-            f"🔗 GitHub: {github_url}\n\n"
+            f"🔗 GitHub: {github_url}\n"
+            f"🌐 ブラウザエディタ: [Online Explorerで開く]({explorer_link})\n\n"
             f"tasks.mdに従って開発を進めてください。"
         )
     

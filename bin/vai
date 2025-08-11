@@ -14,7 +14,7 @@ import warnings
 warnings.filterwarnings('ignore', message='urllib3 .* or chardet .* doesn\'t match a supported')
 
 # Add parent directory to path for imports
-toolkit_root = Path(__file__).parent.parent
+toolkit_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(toolkit_root))
 
 from src.environment import EnvironmentDetector
