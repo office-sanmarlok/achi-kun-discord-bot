@@ -227,8 +227,16 @@ class ClaudeCLIBot(commands.Bot):
         - ログ記録
         - 統計収集
         """
-        # Bot自身のメッセージは無視
+        # Bot自身のメッセージの場合、アニメーションを停止する可能性がある
         if message.author == self.user:
+            # スレッド内のBot自身のメッセージの場合、アニメーションを停止
+            if message.channel.type == discord.ChannelType.public_thread:
+                if self.animator.is_animating(message.channel.id):
+                    await self.animator.stop_animation(
+                        message.channel.id,
+                        "応答を受信しました",
+                        success=True
+                    )
             return
         
         # Discord標準コマンドの処理（!で始まるコマンドを処理）
@@ -318,13 +326,8 @@ class ClaudeCLIBot(commands.Bot):
             # ステップ3: Claude Codeへの転送
             result = await self._forward_to_claude(formatted_message, message, session_num)
             
-            # 正常終了時はアニメーションを停止
-            if animation_message:
-                await self.animator.stop_animation(
-                    message.channel.id,
-                    "メッセージを送信しました",
-                    success=True
-                )
+            # アニメーションは継続（Claude Codeの応答を待つ）
+            # 注: アニメーションの停止はClaude Codeからの応答時、またはタイムアウト時に行う
             
             return result
             

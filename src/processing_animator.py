@@ -32,6 +32,9 @@ class ProcessingAnimator:
     # アニメーション更新間隔（秒）
     UPDATE_INTERVAL = 1.0
     
+    # 最大アニメーション時間（秒） - Claude Codeの応答が来ない場合の自動停止
+    MAX_ANIMATION_DURATION = 120.0  # 2分
+    
     def __init__(self):
         """
         アニメーター初期化
@@ -124,9 +127,22 @@ class ProcessingAnimator:
             message: 更新するメッセージ
             context_message: コンテキストメッセージ
         """
+        start_time = time.time()
+        
         try:
             while True:
                 await asyncio.sleep(self.UPDATE_INTERVAL)
+                
+                # タイムアウトチェック
+                elapsed_time = time.time() - start_time
+                if elapsed_time > self.MAX_ANIMATION_DURATION:
+                    logger.warning(f"Animation timeout for channel {channel_id}")
+                    await self.stop_animation(
+                        channel_id,
+                        "応答待ちタイムアウト（2分経過）",
+                        success=False
+                    )
+                    break
                 
                 # フレームインデックスを更新
                 self.frame_counters[channel_id] = (
