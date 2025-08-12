@@ -619,11 +619,18 @@ class ClaudeCLIBot(commands.Bot):
             # ドキュメントをプロジェクトに追加
             session_manager.add_project_document(idea_name, "idea", idea_file_path)
             
-            # 初期メッセージを投稿
+            # 初期メッセージを投稿（online-explorerリンク付き）
+            # プロジェクトパスをURLエンコード用に変換
+            import urllib.parse
+            relative_project_path = str(project_path).replace('/home/ubuntu/', '')
+            encoded_path = urllib.parse.quote(relative_project_path)
+            explorer_link = f"http://3.15.213.192:3456/?path={encoded_path}"
+            
             initial_message = (
                 f"🎯 プロジェクト `{idea_name}` を作成しました！\n"
                 f"📝 Claude Code セッション #{session_num} を開始しました。\n"
-                f"📄 ファイル: `{idea_file_path}`\n\n"
+                f"📄 ファイル: `{idea_file_path}`\n"
+                f"🔗 作業ディレクトリ: {explorer_link}\n\n"
                 f"アイデアの詳細を記載中です..."
             )
             await thread.send(initial_message)
