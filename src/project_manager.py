@@ -31,19 +31,19 @@ class ProjectManager:
         if not project_root:
             raise EnvironmentError(
                 "PROJECT_ROOT環境変数が設定されていません。"
-                ".envファイルに PROJECT_ROOT=/home/seito_nakagane/project-wsl を設定してください。"
+                ".envファイルに PROJECT_ROOT=/home/ubuntu/sanmarlok-discord を設定してください。"
             )
         
         # 環境変数から設定
-        self.project_wsl_root = Path(project_root)
+        self.project_root = Path(project_root)
         
         # ディレクトリの設定
-        self.achi_kun_root = self.project_wsl_root  # 開発用ディレクトリ（project-wslそのもの）
-        self.projects_dir = self.project_wsl_root / "projects"  # ドキュメント用ディレクトリ
+        self.achi_kun_root = self.project_root  # 開発用ディレクトリ
+        self.projects_dir = self.project_root / "projects"  # ドキュメント用ディレクトリ
         self.projects_root = self.projects_dir  # エイリアスを追加
         
         # GitHub workflowテンプレートのパス
-        self.workflow_templates_dir = self.project_wsl_root / "github-workflow-templates" / ".github"
+        self.workflow_templates_dir = self.project_root / "github-workflow-templates" / ".github"
         
         logger.info(f"ProjectManager initialized - projects: {self.projects_dir}, achi-kun: {self.achi_kun_root}")
     
@@ -155,7 +155,7 @@ class ProjectManager:
         """
         # ソースとターゲットのパス
         source_workflows = self.workflow_templates_dir
-        source_templates_dir = self.project_wsl_root / "github-workflow-templates"
+        source_templates_dir = self.project_root / "github-workflow-templates"
         target_dir = self.achi_kun_root / idea_name
         target_workflows = target_dir / ".github"
         

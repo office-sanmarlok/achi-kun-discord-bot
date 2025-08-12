@@ -582,7 +582,7 @@ class ClaudeCLIBot(commands.Bot):
             session_manager.create_workflow_state(idea_name, ctx.channel.name)
             session_manager.add_thread_to_workflow(idea_name, ctx.channel.name, thread_id)
             
-            # Claude Codeセッションを開始（project-wslディレクトリで）
+            # Claude Codeセッションを開始
             await self._start_claude_session(session_num, thread.name, working_dir)
             
             # Claude Codeの起動完了を待ってからプロンプトを送信

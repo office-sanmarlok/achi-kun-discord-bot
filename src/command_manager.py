@@ -565,7 +565,7 @@ class CommandManager:
         doc_file.touch()
         session_manager.add_project_document(idea_name, stage, doc_file)
         
-        # Claude Codeセッションの開始（project-wslディレクトリで）
+        # Claude Codeセッションの開始
         await self.bot._start_claude_session(session_num, thread.name, working_dir)
         
         # Flask APIにセッション情報を登録
