@@ -48,6 +48,7 @@ from config.settings import SettingsManager
 from src.attachment_manager import AttachmentManager
 from src.session_manager import get_session_manager
 from src.project_manager import ProjectManager
+from src.processing_animator import get_animator
 from src.claude_context_manager import ClaudeContextManager
 from src.channel_validator import ChannelValidator
 from src.command_manager import CommandManager
@@ -129,6 +130,7 @@ class ClaudeCLIBot(commands.Bot):
         self.settings = settings_manager
         self.attachment_manager = AttachmentManager()
         self.message_processor = MessageProcessor()
+        self.animator = get_animator()  # アニメーターの初期化
         
         # 新しいマネージャーの追加
         self.project_manager = ProjectManager()
@@ -296,16 +298,45 @@ class ClaudeCLIBot(commands.Bot):
         - 非同期処理の並列化
         - キャッシュ機能
         """
-        # ステップ1: 添付ファイル処理
-        attachment_paths = await self._process_attachments(message, session_num)
-        
-        # ステップ2: メッセージフォーマット
-        formatted_message = self.message_processor.format_message_with_attachments(
-            message.content, attachment_paths, session_num
-        )
-        
-        # ステップ3: Claude Codeへの転送
-        return await self._forward_to_claude(formatted_message, message, session_num)
+        # アニメーション開始
+        animation_message = None
+        try:
+            # 処理開始時にアニメーションを表示
+            animation_message = await self.animator.start_animation(
+                message.channel,
+                f"メッセージを処理中 (セッション #{session_num})"
+            )
+            
+            # ステップ1: 添付ファイル処理
+            attachment_paths = await self._process_attachments(message, session_num)
+            
+            # ステップ2: メッセージフォーマット
+            formatted_message = self.message_processor.format_message_with_attachments(
+                message.content, attachment_paths, session_num
+            )
+            
+            # ステップ3: Claude Codeへの転送
+            result = await self._forward_to_claude(formatted_message, message, session_num)
+            
+            # 正常終了時はアニメーションを停止
+            if animation_message:
+                await self.animator.stop_animation(
+                    message.channel.id,
+                    "メッセージを送信しました",
+                    success=True
+                )
+            
+            return result
+            
+        except Exception as e:
+            # エラー時もアニメーションを停止
+            if animation_message:
+                await self.animator.stop_animation(
+                    message.channel.id,
+                    f"エラー: {str(e)[:50]}",
+                    success=False
+                )
+            raise
         
     async def _process_attachments(self, message, session_num: int) -> List[str]:
         """
