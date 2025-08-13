@@ -681,15 +681,50 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
     @bot.command(name='status')
     async def status_command(ctx):
         """Bot状態確認コマンド"""
-        sessions = settings.list_sessions()
+        from src.session_manager import get_session_manager
+        from src.tmux_manager import TmuxManager
+        
+        session_manager = get_session_manager()
+        tmux_manager = TmuxManager()
+        
         embed = discord.Embed(
             title="Claude CLI Bot Status",
             description="✅ Bot is running",
             color=discord.Color.green()
         )
         
-        session_list = "\n".join([f"Session {num}: <#{ch_id}>" for num, ch_id in sessions])
-        embed.add_field(name="Active Sessions", value=session_list or "No sessions configured", inline=False)
+        # アクティブなセッション情報を取得
+        active_sessions = session_manager.thread_to_session
+        if active_sessions:
+            session_list = []
+            for thread_id, session_num in active_sessions.items():
+                # tmuxセッションが実際に存在するか確認
+                if tmux_manager.is_claude_session_exists(session_num):
+                    session_list.append(f"Session {session_num}: Thread ID {thread_id}")
+            
+            embed.add_field(
+                name="Active Sessions", 
+                value="
+".join(session_list) if session_list else "No active sessions",
+                inline=False
+            )
+        else:
+            embed.add_field(name="Active Sessions", value="No active sessions", inline=False)
+        
+        # プロジェクト情報も追加
+        projects = session_manager.projects
+        if projects:
+            project_list = []
+            for project in projects.values():
+                status = f"📁 {project.name} - Stage: {project.current_stage}"
+                project_list.append(status)
+            
+            embed.add_field(
+                name="Active Projects",
+                value="
+".join(project_list) if project_list else "No active projects",
+                inline=False
+            )
         
         await ctx.send(embed=embed)
     
