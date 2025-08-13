@@ -694,7 +694,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
         )
         
         # アクティブなセッション情報を取得
-        active_sessions = session_manager.thread_to_session
+        active_sessions = session_manager.thread_sessions
         if active_sessions:
             session_list = []
             for thread_id, session_num in active_sessions.items():
@@ -711,7 +711,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             embed.add_field(name="Active Sessions", value="No active sessions", inline=False)
         
         # プロジェクト情報も追加
-        projects = session_manager.projects
+        projects = session_manager.project_info
         if projects:
             project_list = []
             for project in projects.values():
