@@ -45,7 +45,8 @@ class CommandManager:
             "1-idea": self.handle_idea_complete,
             "2-requirements": self.handle_requirements_complete,
             "3-design": self.handle_design_complete,
-            "4-tasks": self.handle_tasks_complete
+            "4-tasks": self.handle_tasks_complete,
+            "5-development": self.handle_development_complete
         }
     
     async def process_complete_command(self, ctx) -> None:
@@ -64,7 +65,7 @@ class CommandManager:
         channel_name = ctx.channel.parent.name
         stage = self.bot.context_manager.get_stage_from_channel(channel_name)
         
-        if not stage or stage == "development":
+        if not stage:
             await ctx.send("❌ このチャンネルでは!completeコマンドを使用できません")
             return
         
@@ -245,6 +246,186 @@ class CommandManager:
         except Exception as e:
             logger.error(f"Error in handle_tasks_complete: {e}", exc_info=True)
             await loading_msg.edit(content=f"❌ エラーが発生しました: {str(e)[:100]}")
+
+    async def handle_development_complete(self, ctx) -> None:
+        """
+        #5-developmentでの!complete処理（Vercelデプロイ）
+        
+        Args:
+            ctx: Discordコマンドコンテキスト
+        """
+        logger.info(f"development !complete - user: {ctx.author.name}, thread: {ctx.channel.name}")
+        
+        await ctx.send("🚀 Vercelへのデプロイを開始します...")
+        
+        # プロジェクト名を取得（スレッド名から）
+        thread_name = ctx.channel.name
+        
+        # プロジェクトディレクトリに移動
+        project_dir = Path(f"../{thread_name}")
+        if not project_dir.exists():
+            await ctx.send(f"❌ プロジェクトディレクトリが見つかりません: {project_dir}")
+            return
+        
+        # Vercelデプロイワークフローの実行
+        success = await self._execute_vercel_deployment(ctx, project_dir)
+        
+        if success:
+            await ctx.send("✅ Vercelへのデプロイが完了しました！")
+        else:
+            await ctx.send("❌ Vercelデプロイに失敗しました")
+    
+    async def _execute_vercel_deployment(self, ctx, project_dir: Path) -> bool:
+        """
+        Vercelデプロイワークフローの実行
+        
+        Args:
+            ctx: Discordコマンドコンテキスト 
+            project_dir: プロジェクトディレクトリ
+            
+        Returns:
+            成功時True
+        """
+        import subprocess
+        
+        try:
+            # 1. Git add, commit, push
+            await ctx.send("📤 変更をコミットしてGitHubへプッシュ中...")
+            
+            # git add
+            add_result = subprocess.run(
+                ["git", "add", "."],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if add_result.returncode != 0:
+                await ctx.send(f"⚠️ Git addに失敗: {add_result.stderr}")
+                return False
+            
+            # git commit
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", "Deploy to Vercel"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if commit_result.returncode != 0:
+                # nothing to commitの場合は続行
+                if "nothing to commit" in commit_result.stderr.lower() or "nothing to commit" in commit_result.stdout.lower():
+                    await ctx.send("ℹ️ コミットする変更がありません。最新の状態でデプロイします。")
+                else:
+                    await ctx.send(f"⚠️ Git commitに失敗: {commit_result.stderr}")
+                    return False
+            
+            # git push
+            push_result = subprocess.run(
+                ["git", "push", "-u", "origin", "main"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if push_result.returncode != 0:
+                await ctx.send(f"⚠️ Git pushに失敗: {push_result.stderr}")
+                return False
+            
+            # 2. Vercel初回デプロイ
+            await ctx.send("⚙️ Vercelにデプロイ中...")
+            deploy_result = subprocess.run(
+                ["vercel", "--yes"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if deploy_result.returncode != 0:
+                await ctx.send(f"⚠️ Vercelデプロイに失敗: {deploy_result.stderr}")
+                return False
+            
+            # デプロイURLを抽出
+            deploy_output = deploy_result.stdout
+            deploy_url = None
+            for line in deploy_output.split('\n'):
+                if 'https://' in line and '.vercel.app' in line:
+                    deploy_url = line.strip()
+                    break
+            
+            if deploy_url:
+                await ctx.send(f"🌐 プレビューURL: {deploy_url}")
+            
+            # 3. Vercel link
+            await ctx.send("🔗 Vercelプロジェクトをリンク中...")
+            link_result = subprocess.run(
+                ["vercel", "link", "--yes"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if link_result.returncode != 0:
+                await ctx.send(f"⚠️ Vercel linkに失敗: {link_result.stderr}")
+                return False
+            
+            # 4. GitHub連携
+            await ctx.send("🔄 GitHubと連携中...")
+            connect_result = subprocess.run(
+                ["vercel", "git", "connect"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if connect_result.returncode != 0:
+                # git connectはすでに連携済みの場合もエラーになるが、それは問題ない
+                if "already connected" not in connect_result.stderr.lower():
+                    await ctx.send(f"⚠️ GitHub連携の設定中に警告: {connect_result.stderr}")
+            
+            # 5. プロダクションデプロイ
+            await ctx.send("🚀 プロダクション環境にデプロイ中...")
+            prod_result = subprocess.run(
+                ["vercel", "--prod"],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if prod_result.returncode != 0:
+                await ctx.send(f"⚠️ プロダクションデプロイに失敗: {prod_result.stderr}")
+                return False
+            
+            # プロダクションURLを抽出
+            prod_output = prod_result.stdout
+            prod_url = None
+            for line in prod_output.split('\n'):
+                if 'https://' in line and '.vercel.app' in line:
+                    prod_url = line.strip()
+            
+            if prod_url:
+                await ctx.send(f"✨ **プロダクションURL**: {prod_url}")
+            
+            # Online Explorerリンクも追加
+            online_explorer_link = self._generate_online_explorer_link(str(project_dir))
+            await ctx.send(f"📁 プロジェクト: {online_explorer_link}")
+            
+            return True
+            
+        except subprocess.TimeoutExpired:
+            await ctx.send("⏱️ コマンドがタイムアウトしました")
+            return False
+        except Exception as e:
+            logger.error(f"Vercelデプロイエラー: {e}")
+            await ctx.send(f"❌ エラーが発生しました: {str(e)}")
+            return False
     
     async def _execute_git_workflow(
         self,
@@ -806,16 +987,16 @@ class CommandManager:
                 logger.warning("Could not get GitHub user, skipping remote setup")
                 return False
             
-            # リポジトリを作成（プライベート）
-            create_cmd = ["gh", "repo", "create", "claude-projects", 
-                         "--private", "--source", ".", "--remote", "origin",
-                         "--description", "Claude Code project documentation repository"]
+            # リポジトリを作成（パブリック）
+            create_cmd = ["gh", "repo", "create", "achi-kun-projects", 
+                         "--public", "--source", ".", "--remote", "origin",
+                         "--description", "Achi-kun Discord bot project documentation repository"]
             success, output = await async_run(create_cmd, cwd=str(projects_root))
             
             if not success:
                 if "already exists" in output.lower():
                     # リポジトリが既存の場合、リモートを追加
-                    remote_url = f"https://github.com/{github_user}/claude-projects.git"
+                    remote_url = f"https://github.com/{github_user}/achi-kun-projects.git"
                     add_remote_cmd = ["git", "remote", "add", "origin", remote_url]
                     success, output = await self.bot.project_manager.execute_git_command(
                         projects_root, add_remote_cmd
@@ -844,7 +1025,7 @@ class CommandManager:
             )
             
             if success:
-                await loading_msg.edit(content="`...` プロジェクトリポジトリを作成しました: https://github.com/{}/claude-projects".format(github_user))
+                await loading_msg.edit(content="`...` プロジェクトリポジトリを作成しました: https://github.com/{}/achi-kun-projects".format(github_user))
             
             return success
             

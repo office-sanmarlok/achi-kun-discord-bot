@@ -6,7 +6,7 @@ Session Manager - メモリベースのセッション管理
 メモリ上で管理します。サーバー再起動時にはリセットされます。
 """
 
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Set
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +63,9 @@ class SessionManager:
         self.workflow_states: Dict[str, WorkflowState] = {}  # idea_name -> WorkflowState
         self.thread_to_idea: Dict[str, str] = {}  # thread_id -> idea_name
         
+        # コマンド経由で作成されたスレッドを追跡
+        self.command_created_threads: Set[str] = set()  # thread_id のセット  # thread_id -> idea_name
+        
     def get_or_create_session(self, thread_id: str) -> int:
         """
         スレッドIDに対応するセッション番号を取得または作成
@@ -83,6 +86,28 @@ class SessionManager:
         
         logger.info(f"New session created: Thread {thread_id} -> Session {session_num}")
         return session_num
+
+    def mark_as_command_thread(self, thread_id: str):
+        """
+        コマンド経由で作成されたスレッドとしてマーク
+        
+        Args:
+            thread_id: Discord スレッドID
+        """
+        self.command_created_threads.add(thread_id)
+        logger.info(f"Thread {thread_id} marked as command-created thread")
+    
+    def is_command_thread(self, thread_id: str) -> bool:
+        """
+        コマンド経由で作成されたスレッドか確認
+        
+        Args:
+            thread_id: Discord スレッドID
+            
+        Returns:
+            コマンド経由で作成された場合True
+        """
+        return thread_id in self.command_created_threads
         
     def get_session(self, thread_id: str) -> Optional[int]:
         """

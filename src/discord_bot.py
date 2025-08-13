@@ -256,13 +256,23 @@ class ClaudeCLIBot(commands.Bot):
         
         # 既存セッションがあるか確認
         existing_session = session_manager.get_session(thread_id)
-        session_num = session_manager.get_or_create_session(thread_id)
         
-        # 新規セッションの場合、Claude Codeセッションを開始
-        if existing_session is None:  # 今作成された場合
+        # 新規セッションの場合
+        if existing_session is None:
+            # コマンド経由で作成されたスレッドかチェック
+            if not session_manager.is_command_thread(thread_id):
+                # コマンド経由でないスレッドは無視
+                logger.info(f"Ignoring non-command thread {thread_id}")
+                return
+            
+            # コマンド経由スレッドの場合のみセッションを開始
+            session_num = session_manager.get_or_create_session(thread_id)
             await message.channel.join()  # スレッドに参加
             await self._start_claude_session(session_num, message.channel.name)
-            logger.info(f"Created session {session_num} for existing thread {thread_id}")
+            logger.info(f"Created session {session_num} for command thread {thread_id}")
+        else:
+            # 既存セッションがある場合はそのまま使用
+            session_num = existing_session
         
         try:
             # メッセージ処理パイプライン
@@ -550,6 +560,10 @@ class ClaudeCLIBot(commands.Bot):
             # セッション管理
             thread_id = str(thread.id)
             session_manager = get_session_manager()
+            
+            # コマンド経由スレッドとしてマーク
+            session_manager.mark_as_command_thread(thread_id)
+            
             session_num = session_manager.get_or_create_session(thread_id)
             
             # プロジェクト構造の作成
@@ -729,6 +743,10 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             # セッション番号を割り当て
             thread_id = str(thread.id)
             session_manager = get_session_manager()
+            
+            # コマンド経由スレッドとしてマーク
+            session_manager.mark_as_command_thread(thread_id)
+            
             session_num = session_manager.get_or_create_session(thread_id)
             
             # Claude Codeセッションを開始
@@ -754,6 +772,36 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             template_content = template_loader.load_and_combine_templates("cc.md")
             
             if template_content:
+                # 親メッセージの内容を取得（embedsも含める）
+                parent_content = parent_message.content
+                
+                # embedsがある場合は追加
+                if parent_message.embeds:
+                    embed_texts = []
+                    for embed in parent_message.embeds:
+                        embed_text = ""
+                        if embed.title:
+                            embed_text += f"**{embed.title}**\n"
+                        if embed.description:
+                            embed_text += f"{embed.description}\n"
+                        if embed.fields:
+                            for field in embed.fields:
+                                embed_text += f"\n**{field.name}**\n{field.value}\n"
+                        if embed.footer:
+                            embed_text += f"\n_{embed.footer.text}_"
+                        embed_texts.append(embed_text)
+                    
+                    if parent_content:
+                        parent_content += "\n\n=== 埋め込みコンテンツ ===\n"
+                    parent_content += "\n---\n".join(embed_texts)
+                
+                # attachmentsがある場合は追加
+                if parent_message.attachments:
+                    attachment_info = "\n\n=== 添付ファイル ===\n"
+                    for attachment in parent_message.attachments:
+                        attachment_info += f"- {attachment.filename} ({attachment.size} bytes)\n"
+                    parent_content += attachment_info
+                
                 # 変数を準備
                 variables = {
                     'channel_name': parent_message.channel.name,
@@ -762,13 +810,43 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
                     'session_num': session_num,
                     'author': parent_message.author.name,
                     'created_at': parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                    'parent_content': parent_message.content
+                    'parent_content': parent_content
                 }
                 
                 # テンプレート変数を置換
                 prompt = template_loader.render_template(template_content, variables)
             else:
                 # フォールバック（テンプレートが見つからない場合）
+                # 親メッセージの内容を取得（embedsも含める）
+                parent_content = parent_message.content
+                
+                # embedsがある場合は追加
+                if parent_message.embeds:
+                    embed_texts = []
+                    for embed in parent_message.embeds:
+                        embed_text = ""
+                        if embed.title:
+                            embed_text += f"**{embed.title}**\n"
+                        if embed.description:
+                            embed_text += f"{embed.description}\n"
+                        if embed.fields:
+                            for field in embed.fields:
+                                embed_text += f"\n**{field.name}**\n{field.value}\n"
+                        if embed.footer:
+                            embed_text += f"\n_{embed.footer.text}_"
+                        embed_texts.append(embed_text)
+                    
+                    if parent_content:
+                        parent_content += "\n\n=== 埋め込みコンテンツ ===\n"
+                    parent_content += "\n---\n".join(embed_texts)
+                
+                # attachmentsがある場合は追加
+                if parent_message.attachments:
+                    attachment_info = "\n\n=== 添付ファイル ===\n"
+                    for attachment in parent_message.attachments:
+                        attachment_info += f"- {attachment.filename} ({attachment.size} bytes)\n"
+                    parent_content += attachment_info
+                
                 prompt = f"""=== Discord スレッド情報 ===
 チャンネル名: {parent_message.channel.name}
 スレッド名: {thread.name}
@@ -782,7 +860,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
 作成者: {parent_message.author.name}
 時刻: {parent_message.created_at.strftime('%Y-%m-%d %H:%M:%S')}
 内容:
-{parent_message.content}
+{parent_content}
 ===================
 
 このスレッドでメッセージを送信すると、Claude Codeに転送されます。"""
