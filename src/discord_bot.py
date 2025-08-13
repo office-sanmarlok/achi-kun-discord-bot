@@ -704,8 +704,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             
             embed.add_field(
                 name="Active Sessions", 
-                value="
-".join(session_list) if session_list else "No active sessions",
+                value="\n".join(session_list) if session_list else "No active sessions",
                 inline=False
             )
         else:
@@ -721,8 +720,7 @@ def create_bot_commands(bot: ClaudeCLIBot, settings: SettingsManager):
             
             embed.add_field(
                 name="Active Projects",
-                value="
-".join(project_list) if project_list else "No active projects",
+                value="\n".join(project_list) if project_list else "No active projects",
                 inline=False
             )
         
